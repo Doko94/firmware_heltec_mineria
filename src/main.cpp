@@ -5,6 +5,7 @@
 #include <NimBLEDevice.h>
 #include <RadioLib.h>
 #include <SPI.h>
+#include <SSD1306Wire.h>
 #include <WebServer.h>
 #include <WiFi.h>
 #include <cmath>
@@ -179,6 +180,8 @@ WebServer server(80);
 DNSServer dnsServer;
 NimBLEScan* scanner = nullptr;
 SX1262 radio = new Module(SS, DIO0, RST_LoRa, BUSY_LoRa);
+SSD1306Wire oledDisplay(0x3C, SDA_OLED, SCL_OLED, GEOMETRY_128_64,
+                        I2C_ONE, 400000);
 String supervisorName;
 bool adminAuthenticated = false;
 uint64_t clockEpochBase = 0;
@@ -189,6 +192,7 @@ uint32_t readerLastSeen[READER_COUNT] = {0, 0, 0};
 uint16_t loRaSequence = 0;
 volatile bool loRaPacketReady = false;
 bool loRaReady = false;
+bool oledReady = false;
 
 uint64_t epochNow() {
   if (clockEpochBase == 0) return 0;
@@ -1246,6 +1250,42 @@ void startLoRa() {
                 loRaReady ? "activo" : "error", LORA_FREQUENCY_MHZ, receiveState);
 }
 
+const char* oledSectorLabel() {
+  if (LOCAL_READER_INDEX == 0) return "Portal / Control";
+  if (LOCAL_READER_INDEX == 1) return "Rampa";
+  return "Frente de trabajo";
+}
+
+void renderOledStatus() {
+  if (!oledReady) return;
+  oledDisplay.clear();
+  oledDisplay.setTextAlignment(TEXT_ALIGN_CENTER);
+  oledDisplay.setFont(ArialMT_Plain_16);
+  oledDisplay.drawString(64, 0, READER_ID);
+  oledDisplay.setFont(ArialMT_Plain_10);
+  oledDisplay.drawString(64, 18, oledSectorLabel());
+  oledDisplay.drawString(64, 29, "WiFi: MINA-LOCAL");
+  oledDisplay.drawString(64, 40, "IP: 192.168.4.1");
+  oledDisplay.drawString(64, 51,
+                         String("LoRa 915: ") + (loRaReady ? "OK" : "ERROR"));
+  oledDisplay.display();
+}
+
+void startOled() {
+  pinMode(Vext, OUTPUT);
+  digitalWrite(Vext, LOW);
+  pinMode(RST_OLED, OUTPUT);
+  digitalWrite(RST_OLED, LOW);
+  delay(20);
+  digitalWrite(RST_OLED, HIGH);
+  delay(20);
+  oledDisplay.init();
+  oledDisplay.setBrightness(128);
+  oledReady = true;
+  renderOledStatus();
+  Serial.printf("[OLED] Identificacion %s activa\n", READER_ID);
+}
+
 void transmitLocalObservations() {
   if (!loRaReady || millis() - lastLoRaTx < LORA_TX_INTERVAL_MS + LOCAL_READER_INDEX * 170) return;
   lastLoRaTx = millis();
@@ -1327,6 +1367,7 @@ void startBluetooth() {
 void setup() {
   Serial.begin(115200);
   delay(300);
+  startOled();
   Serial.printf("\n[INICIO] Plataforma minera autónoma %s\n", READER_ID);
   if (!LittleFS.begin(true, "/littlefs", 10, "littlefs")) Serial.println("[FS] ERROR LittleFS");
   else {
@@ -1337,6 +1378,7 @@ void setup() {
   startNetwork();
   configureWeb();
   startLoRa();
+  renderOledStatus();
   startBluetooth();
 #if 0
 #if MINA_READER_NUMBER == 3
