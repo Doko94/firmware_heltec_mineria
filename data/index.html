@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="/static/messages.css">
   <link rel="stylesheet" href="/static/supervisor-fix.css">
   <link rel="stylesheet" href="/static/groundhog-theme.css">
-  <link rel="stylesheet" href="/static/contrast-cards.css?v=20260808-34">
+  <link rel="stylesheet" href="/static/contrast-cards.css?v=20260812-35">
 </head>
 <body>
   <header class="topbar">
@@ -23,7 +23,6 @@
   <main>
     <section class="hero">
       <div><span class="kicker">MONITOREO LOCAL · SIN INTERNET</span><h1>Personas y maquinaria alrededor del receptor</h1><p>Los TAG móviles van instalados en cascos, lámparas mineras y equipos. Los readers permanecen fijos en puntos estratégicos.</p></div>
-      <button id="refresh" class="refresh-button" type="button" aria-label="Actualizar estados" title="Actualizar estados"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M25.3 10.3A11 11 0 0 0 6 9.1"></path><path d="M6.2 4.7 6 9.4l4.7.1"></path><path d="M6.7 21.7A11 11 0 0 0 26 22.9"></path><path d="m25.8 27.3.2-4.7-4.7-.1"></path></svg><span class="visually-hidden">Actualizar estados</span></button>
     </section>
 
     <section class="receiver">
@@ -58,7 +57,13 @@
         <article><span class="tag-symbol reader">R</span><div><strong>Reader fijo — no es beacon</strong><small>Este ESP32 recibe los beacons y mantiene la página disponible de forma autónoma.</small></div></article>
       </div>
       <div class="hardware-note"><strong>Configuración autónoma:</strong> 3 beacons móviles = 2 cascos + 1 máquina. El reader ESP32 escanea BLE y aloja esta página sin Internet.</div>
-      <div class="layout-actions map-toolbar" aria-label="Herramientas del mapa"><label for="dxfFile" class="admin-layout-control button-primary" hidden>Importar DXF</label><input id="dxfFile" type="file" accept=".dxf"><button id="mapZoomIn" class="button-map zoom-only" type="button" aria-label="Acercar mapa" title="Acercar mapa"><svg class="zoom-icon" viewBox="0 0 32 32" aria-hidden="true"><circle cx="13.5" cy="13.5" r="8.5"></circle><path d="m20 20 7 7M9.5 13.5h8M13.5 9.5v8"></path></svg></button><button id="mapZoomOut" class="button-map zoom-only" type="button" aria-label="Alejar mapa" title="Alejar mapa"><svg class="zoom-icon" viewBox="0 0 32 32" aria-hidden="true"><circle cx="13.5" cy="13.5" r="8.5"></circle><path d="m20 20 7 7M9.5 13.5h8"></path></svg></button><button id="resetView" class="button-map" type="button">Centrar mapa</button></div>
+      <div class="layout-actions map-toolbar" aria-label="Herramientas del mapa">
+        <label for="dxfFile" class="admin-layout-control button-primary" hidden>Importar DXF</label><input id="dxfFile" type="file" accept=".dxf">
+        <button id="resetView" class="button-map" type="button">Centrar mapa</button>
+        <button id="refresh" class="button-map zoom-only refresh-map" type="button" aria-label="Actualizar estados" title="Actualizar estados"><svg class="refresh-icon" viewBox="0 0 32 32" aria-hidden="true"><path d="M25.3 10.3A11 11 0 0 0 6 9.1"></path><path d="M6.2 4.7 6 9.4l4.7.1"></path><path d="M6.7 21.7A11 11 0 0 0 26 22.9"></path><path d="m25.8 27.3.2-4.7-4.7-.1"></path></svg><span class="visually-hidden">Actualizar estados</span></button>
+        <button id="mapZoomIn" class="button-map zoom-only" type="button" aria-label="Acercar mapa" title="Acercar mapa"><svg class="zoom-icon" viewBox="0 0 32 32" aria-hidden="true"><circle cx="13.5" cy="13.5" r="8.5"></circle><path d="m20 20 7 7M9.5 13.5h8M13.5 9.5v8"></path></svg></button>
+        <button id="mapZoomOut" class="button-map zoom-only" type="button" aria-label="Alejar mapa" title="Alejar mapa"><svg class="zoom-icon" viewBox="0 0 32 32" aria-hidden="true"><circle cx="13.5" cy="13.5" r="8.5"></circle><path d="m20 20 7 7M9.5 13.5h8"></path></svg></button>
+      </div>
       <div class="mine-layout">
         <svg id="mineSvg" viewBox="0 0 1000 560" role="img" aria-label="Layout tridimensional de la mina"></svg>
         <div class="map-help">Rueda o botones para zoom · arrastra para desplazarte</div>

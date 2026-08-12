@@ -1397,7 +1397,7 @@ button:not(.pin-toggle):not(.refresh-button):not(.dialog-head > button) {
 }
 @media (max-width: 620px) {
   .map-toolbar {
-    grid-template-columns: minmax(0, 1fr) 48px 48px !important;
+    grid-template-columns: minmax(0, 1fr) 48px 48px 48px !important;
     grid-template-rows: 48px !important;
     justify-items: stretch;
     align-items: center;
@@ -1413,8 +1413,9 @@ button:not(.pin-toggle):not(.refresh-button):not(.dialog-head > button) {
     padding: 0 12px !important;
     font-size: .68rem !important;
   }
-  .map-toolbar > #mapZoomIn { grid-column: 2; grid-row: 1; justify-self: end; }
-  .map-toolbar > #mapZoomOut { grid-column: 3; grid-row: 1; justify-self: end; }
+  .map-toolbar > #refresh { grid-column: 2; grid-row: 1; justify-self: end; }
+  .map-toolbar > #mapZoomIn { grid-column: 3; grid-row: 1; justify-self: end; }
+  .map-toolbar > #mapZoomOut { grid-column: 4; grid-row: 1; justify-self: end; }
   .map-toolbar > .admin-layout-control { grid-column: 1 / -1; grid-row: 2; }
   .map-toolbar > .button-map.zoom-only {
     width: 48px !important;
@@ -1422,3 +1423,22 @@ button:not(.pin-toggle):not(.refresh-button):not(.dialog-head > button) {
     max-width: 48px !important;
   }
 }
+
+/* Actualizar comparte la fila y las dimensiones de los controles de zoom. */
+.map-toolbar > #refresh.refresh-map,
+.map-toolbar > #refresh.refresh-map:hover,
+.map-toolbar > #refresh.refresh-map:active {
+  background: #f5c900 !important;
+  color: #17211d !important;
+}
+.map-toolbar > #refresh .refresh-icon {
+  width: 31px;
+  height: 31px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform .25s ease;
+}
+.map-toolbar > #refresh:hover .refresh-icon { transform: rotate(28deg); }

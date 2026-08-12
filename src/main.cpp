@@ -69,7 +69,9 @@ constexpr int READER_X = LOCAL_READER.x;
 constexpr int READER_Y = LOCAL_READER.y;
 constexpr int READER_Z = LOCAL_READER.z;
 constexpr char AP_SSID[] = "MINA-LOCAL";
-constexpr uint8_t AP_CHANNEL = 1;
+// Canal fijo distinto al canal 1 usado habitualmente por el router del lugar.
+// Todos los respaldos lo conservan para que la reconexion sea rapida.
+constexpr uint8_t AP_CHANNEL = 6;
 constexpr char TARGET_UUID[] = "E2C56DB5DFFB48D2B060D0F5A71096E0";
 constexpr char SUPERVISOR_PIN[] = "123456";
 constexpr char ADMIN_PIN[] = "12345";
@@ -77,6 +79,7 @@ constexpr uint8_t DNS_PORT = 53;
 constexpr uint32_t TAG_TIMEOUT_MS = 12000;
 constexpr uint32_t STATE_REFRESH_MS = 500;
 constexpr uint32_t READER_HEARTBEAT_TIMEOUT_MS = 9000;
+constexpr uint32_t PORTAL_ELECTION_GRACE_MS = 6500;
 // Primero se intenta el BSSID conocido de RX-02. Si no responde, RX-03
 // publica MINA-LOCAL rápidamente, sin efectuar un barrido completo de canales.
 constexpr uint32_t EMERGENCY_AP_DELAY_MS = 1200;
@@ -96,6 +99,8 @@ constexpr float LORA_BANDWIDTH_KHZ = 125.0F;
 constexpr uint8_t LORA_SPREADING_FACTOR = 7;
 constexpr uint8_t LORA_CODING_RATE = 5;
 constexpr int8_t LORA_POWER_DBM = 14;
+constexpr uint8_t LORA_PORTAL_ACTIVE_FLAG = 0x80;
+constexpr uint8_t LORA_READING_COUNT_MASK = 0x7F;
 
 struct ReaderObservation {
   int rssi = -127;
@@ -193,18 +198,45 @@ uint16_t loRaSequence = 0;
 volatile bool loRaPacketReady = false;
 bool loRaReady = false;
 bool oledReady = false;
+bool portalAccessPointActive = false;
+bool readerPortalActive[READER_COUNT] = {false, false, false};
+uint32_t portalElectionStartedAt = 0;
+
+void renderOledStatus();
 
 uint64_t epochNow() {
   if (clockEpochBase == 0) return 0;
   return clockEpochBase + static_cast<uint64_t>(millis() - clockMillisBase);
 }
 
+bool readerOnline(size_t index, uint32_t now) {
+  if (index == LOCAL_READER_INDEX) return true;
+  return readerLastSeen[index] != 0 &&
+         now - readerLastSeen[index] <= READER_HEARTBEAT_TIMEOUT_MS;
+}
+
+int activePortalIndex() {
+  const uint32_t now = millis();
+  for (size_t index = 0; index < READER_COUNT; ++index) {
+    const bool active = index == LOCAL_READER_INDEX
+                            ? portalAccessPointActive
+                            : readerPortalActive[index];
+    if (active && readerOnline(index, now)) return static_cast<int>(index);
+  }
+  return -1;
+}
+
 String activeCoordinatorId() {
-  return "RX-01";
+  const int index = activePortalIndex();
+  return index >= 0 ? READERS[index].id : "buscando";
 }
 
 String localCoordinatorRole() {
-  return LOCAL_READER_INDEX == 0 ? "coordinador_preferido" : "reader_respaldo";
+  if (portalAccessPointActive) {
+    return LOCAL_READER_INDEX == 0 ? "coordinador_preferido"
+                                   : "coordinador_respaldo";
+  }
+  return "reader_distribuido";
 }
 
 bool peerReaderOnline() {
@@ -1220,18 +1252,112 @@ void IRAM_ATTR onLoRaPacket() {
 
 void startNetwork() {
   WiFi.persistent(false);
-  WiFi.setSleep(true);
+  portalElectionStartedAt = millis();
+
+  if (LOCAL_READER_INDEX != 0) {
+    // Mantiene inicializada la pila TCP/IP para que WebServer pueda arrancar,
+    // pero no publica ningun SSID mientras este reader sea respaldo.
+    WiFi.mode(WIFI_STA);
+    WiFi.setSleep(true);
+    Serial.printf("[RED] %s en espera; respaldo automatico de MINA-LOCAL\n", READER_ID);
+    return;
+  }
+
   WiFi.mode(WIFI_AP);
+  WiFi.setSleep(true);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
   const IPAddress localIp(192, 168, 4, 1);
   const IPAddress subnet(255, 255, 255, 0);
   WiFi.softAPConfig(localIp, localIp, subnet);
   if (!WiFi.softAP(AP_SSID, nullptr, AP_CHANNEL, false, 8)) {
     Serial.println("[RED] ERROR al crear MINA-LOCAL");
+    WiFi.mode(WIFI_OFF);
     return;
   }
   dnsServer.start(DNS_PORT, "*", localIp);
-  Serial.printf("[RED] %s disponible desde %s en http://%s\n",
-                AP_SSID, READER_ID, localIp.toString().c_str());
+  portalAccessPointActive = true;
+  readerPortalActive[LOCAL_READER_INDEX] = true;
+  Serial.printf("[RED] %s disponible desde %s en http://%s (canal %u)\n",
+                AP_SSID, READER_ID, localIp.toString().c_str(), AP_CHANNEL);
+}
+
+void startPortalAccessPoint() {
+  if (portalAccessPointActive) return;
+
+  WiFi.mode(WIFI_AP);
+  WiFi.setSleep(true);
+  WiFi.setTxPower(WIFI_POWER_19_5dBm);
+  const IPAddress localIp(192, 168, 4, 1);
+  const IPAddress subnet(255, 255, 255, 0);
+  WiFi.softAPConfig(localIp, localIp, subnet);
+  if (!WiFi.softAP(AP_SSID, nullptr, AP_CHANNEL, false, 8)) {
+    Serial.println("[RED] ERROR al crear MINA-LOCAL de respaldo");
+    WiFi.mode(WIFI_OFF);
+    return;
+  }
+  dnsServer.start(DNS_PORT, "*", localIp);
+  portalAccessPointActive = true;
+  readerPortalActive[LOCAL_READER_INDEX] = true;
+  Serial.printf("[RED] %s asumido por %s en http://%s (canal %u)\n",
+                AP_SSID, READER_ID, localIp.toString().c_str(), AP_CHANNEL);
+  renderOledStatus();
+}
+
+void stopPortalAccessPoint() {
+  if (!portalAccessPointActive) return;
+
+  dnsServer.stop();
+  WiFi.softAPdisconnect(true);
+  // STA sin asociar no emite MINA-LOCAL y deja lista la pila TCP/IP para un
+  // nuevo failover, evitando reiniciar el servidor web.
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(true);
+  portalAccessPointActive = false;
+  readerPortalActive[LOCAL_READER_INDEX] = false;
+  Serial.printf("[RED] %s libera el portal; queda como reader distribuido\n", READER_ID);
+  renderOledStatus();
+}
+
+void maintainPortalElection() {
+  const uint32_t now = millis();
+  bool oledNeedsRefresh = false;
+  for (size_t index = 0; index < READER_COUNT; ++index) {
+    if (index != LOCAL_READER_INDEX && readerPortalActive[index] &&
+        !readerOnline(index, now)) {
+      readerPortalActive[index] = false;
+      oledNeedsRefresh = true;
+    }
+  }
+  if (oledNeedsRefresh) renderOledStatus();
+
+  if (LOCAL_READER_INDEX == 0) {
+    if (!portalAccessPointActive) startPortalAccessPoint();
+    return;
+  }
+
+  bool preferredReaderOnline = false;
+  bool preferredPortalActive = false;
+  for (size_t index = 0; index < LOCAL_READER_INDEX; ++index) {
+    if (readerOnline(index, now)) {
+      preferredReaderOnline = true;
+      if (readerPortalActive[index]) preferredPortalActive = true;
+    }
+  }
+
+  // Un respaldo que ya esta atendiendo clientes solo entrega el portal cuando
+  // el reader preferido confirma que su propio SoftAP ya quedo operativo.
+  if (portalAccessPointActive) {
+    if (preferredPortalActive) stopPortalAccessPoint();
+    return;
+  }
+
+  // En el arranque se da prioridad al reader de numero menor para impedir que
+  // dos equipos creen el mismo SSID mientras se completa la eleccion.
+  if (preferredReaderOnline) return;
+
+  if (now - portalElectionStartedAt >= PORTAL_ELECTION_GRACE_MS) {
+    startPortalAccessPoint();
+  }
 }
 
 void startLoRa() {
@@ -1264,8 +1390,13 @@ void renderOledStatus() {
   oledDisplay.drawString(64, 0, READER_ID);
   oledDisplay.setFont(ArialMT_Plain_10);
   oledDisplay.drawString(64, 18, oledSectorLabel());
-  oledDisplay.drawString(64, 29, "WiFi: MINA-LOCAL");
-  oledDisplay.drawString(64, 40, "IP: 192.168.4.1");
+  if (portalAccessPointActive) {
+    oledDisplay.drawString(64, 29, "WiFi: MINA-LOCAL");
+    oledDisplay.drawString(64, 40, "IP: 192.168.4.1");
+  } else {
+    oledDisplay.drawString(64, 29, "WiFi: respaldo");
+    oledDisplay.drawString(64, 40, String("Portal: ") + activeCoordinatorId());
+  }
   oledDisplay.drawString(64, 51,
                          String("LoRa 915: ") + (loRaReady ? "OK" : "ERROR"));
   oledDisplay.display();
@@ -1280,6 +1411,9 @@ void startOled() {
   digitalWrite(RST_OLED, HIGH);
   delay(20);
   oledDisplay.init();
+  // El display queda fisicamente invertido dentro del gabinete Heltec.
+  // Rota la imagen 180 grados para leerla con "heltec.org" hacia arriba.
+  oledDisplay.flipScreenVertically();
   oledDisplay.setBrightness(128);
   oledReady = true;
   renderOledStatus();
@@ -1308,7 +1442,10 @@ void transmitLocalObservations() {
     reading.age100ms = static_cast<uint16_t>(age100ms > 65535 ? 65535 : age100ms);
   }
 
-  const size_t length = offsetof(LoRaObservationFrame, readings) + frame.count * sizeof(LoRaReading);
+  const uint8_t readingCount = frame.count;
+  const size_t length = offsetof(LoRaObservationFrame, readings) +
+                        readingCount * sizeof(LoRaReading);
+  if (portalAccessPointActive) frame.count |= LORA_PORTAL_ACTIVE_FLAG;
   radio.clearPacketReceivedAction();
   const int16_t state = radio.transmit(reinterpret_cast<uint8_t*>(&frame), length);
   radio.setPacketReceivedAction(onLoRaPacket);
@@ -1326,13 +1463,22 @@ void receiveLoRaObservations() {
     state = radio.readData(reinterpret_cast<uint8_t*>(&frame), length);
   }
   radio.startReceive();
+  const uint8_t readingCount = frame.count & LORA_READING_COUNT_MASK;
+  const size_t expectedLength = offsetof(LoRaObservationFrame, readings) +
+                                readingCount * sizeof(LoRaReading);
   if (state != RADIOLIB_ERR_NONE || frame.magic != 0x4D49 || frame.version != 1 ||
       frame.readerNumber < 1 || frame.readerNumber > READER_COUNT ||
-      frame.readerNumber == MINA_READER_NUMBER || frame.count > TAG_COUNT) return;
+      frame.readerNumber == MINA_READER_NUMBER || readingCount > TAG_COUNT ||
+      length != expectedLength) return;
 
   const size_t remoteIndex = frame.readerNumber - 1;
   readerLastSeen[remoteIndex] = millis();
-  for (uint8_t index = 0; index < frame.count; ++index) {
+  const bool remotePortalActive = (frame.count & LORA_PORTAL_ACTIVE_FLAG) != 0;
+  if (readerPortalActive[remoteIndex] != remotePortalActive) {
+    readerPortalActive[remoteIndex] = remotePortalActive;
+    renderOledStatus();
+  }
+  for (uint8_t index = 0; index < readingCount; ++index) {
     const LoRaReading& reading = frame.readings[index];
     for (TagState& tag : tags) {
       if (tag.major != reading.major || tag.minor != reading.minor) continue;
@@ -1348,6 +1494,7 @@ void receiveLoRaObservations() {
 
 void maintainReaderNetwork() {
   receiveLoRaObservations();
+  maintainPortalElection();
   transmitLocalObservations();
 }
 
@@ -1355,10 +1502,12 @@ void startBluetooth() {
   NimBLEDevice::init("");
   scanner = NimBLEDevice::getScan();
   scanner->setScanCallbacks(&beaconCallbacks, true);
-  scanner->setActiveScan(true);
+  // iBeacon incluye los datos en el anuncio. El barrido activo compite con
+  // WiFi por la radio de 2.4 GHz sin aportar informacion adicional.
+  scanner->setActiveScan(false);
   scanner->setMaxResults(0);
   scanner->setInterval(160);
-  scanner->setWindow(120);
+  scanner->setWindow(80);
   scanner->start(0, false, true);
 }
 
@@ -1374,7 +1523,7 @@ void setup() {
     Serial.printf("[FS] %u bytes usados de %u\n", LittleFS.usedBytes(), LittleFS.totalBytes());
     loadMessages();
   }
-  // La red debe quedar visible o enlazada antes de ocupar la radio con BLE.
+  // La red debe quedar inicializada antes de compartir la radio con BLE.
   startNetwork();
   configureWeb();
   startLoRa();
@@ -1387,8 +1536,12 @@ void setup() {
   Serial.printf("[WEB] Conecta el celular o notebook a %s y abre http://%s\n", AP_SSID, WiFi.softAPIP().toString().c_str());
 #endif
 #endif
-  Serial.printf("[WEB] Conecta el celular o notebook a %s y abre http://%s\n",
-                AP_SSID, WiFi.softAPIP().toString().c_str());
+  if (portalAccessPointActive) {
+    Serial.printf("[WEB] Conecta el celular o notebook a %s y abre http://%s\n",
+                  AP_SSID, WiFi.softAPIP().toString().c_str());
+  } else {
+    Serial.printf("[WEB] %s queda en espera como respaldo del portal\n", READER_ID);
+  }
 }
 
 void loop() {
@@ -1399,8 +1552,10 @@ void loop() {
   if (emergencyApActive) dnsServer.processNextRequest();
 #endif
 #endif
-  dnsServer.processNextRequest();
-  server.handleClient();
+  if (portalAccessPointActive) {
+    dnsServer.processNextRequest();
+    server.handleClient();
+  }
   maintainReaderNetwork();
   if (millis() - lastStateRefresh >= STATE_REFRESH_MS) {
     lastStateRefresh = millis();
