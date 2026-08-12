@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="/static/messages.css">
   <link rel="stylesheet" href="/static/supervisor-fix.css">
   <link rel="stylesheet" href="/static/groundhog-theme.css">
-  <link rel="stylesheet" href="/static/contrast-cards.css?v=20260812-35">
+  <link rel="stylesheet" href="/static/contrast-cards.css?v=20260812-36">
 </head>
 <body>
   <header class="topbar">
@@ -22,7 +22,7 @@
 
   <main>
     <section class="hero">
-      <div><span class="kicker">MONITOREO LOCAL · SIN INTERNET</span><h1>Personas y maquinaria alrededor del receptor</h1><p>Los TAG móviles van instalados en cascos, lámparas mineras y equipos. Los readers permanecen fijos en puntos estratégicos.</p></div>
+      <div><span class="kicker">CONTROL VEHICULAR LOCAL · SIN INTERNET</span><h1>Vehículos dentro y fuera del estacionamiento minero</h1><p>Los TAG vehiculares permiten distinguir equipos estacionados, ingresando por el acceso o saliendo hacia la ruta minera.</p></div>
     </section>
 
     <section class="receiver">
@@ -49,14 +49,15 @@
 
     <section class="rtls-module">
       <div class="rtls-head">
-        <div><span class="label">RTLS SUBTERRÁNEO · CONFIGURACIÓN ACTUAL</span><h2>Mapa local del reader ESP32</h2><p>Ubicación por último punto de lectura: identifica el sector, no una coordenada GPS exacta.</p></div>
+        <div><span class="label">ESTACIONAMIENTO MINA COLLAHUASI · CONFIGURACIÓN CONCEPTUAL</span><h2>Control local de aparcamientos</h2><p>RX01 ordena los vehículos detectados en plazas; RX02 marca el ingreso y RX03 la salida hacia el camino minero.</p></div>
+                <a class="dxf-download" href="/static/parking.dxf" download="estacionamiento_collahuasi_conceptual.dxf">Descargar DXF</a>
       </div>
       <div class="tag-explainer">
-        <article><span class="tag-symbol person">C</span><div><strong>TAG de persona</strong><small>Se fija en el casco o la lámpara del trabajador y se mueve con él.</small></div></article>
-        <article><span class="tag-symbol machine">M</span><div><strong>TAG de maquinaria</strong><small>Se protege y fija en scoop, camión, perforadora u otro equipo móvil.</small></div></article>
-        <article><span class="tag-symbol reader">R</span><div><strong>Reader fijo — no es beacon</strong><small>Este ESP32 recibe los beacons y mantiene la página disponible de forma autónoma.</small></div></article>
+        <article><span class="tag-symbol machine">V</span><div><strong>TAG vehicular</strong><small>Se instala protegido en la cabina o parabrisas de cada vehículo monitoreado.</small></div></article>
+        <article><span class="tag-symbol reader">R1</span><div><strong>RX01 · Estacionamiento</strong><small>Confirma presencia dentro del recinto y asigna visualmente una plaza disponible.</small></div></article>
+        <article><span class="tag-symbol reader">R2</span><div><strong>RX02 / RX03 · Caminos</strong><small>Distinguen un vehículo ingresando al aparcamiento o saliendo hacia la ruta.</small></div></article>
       </div>
-      <div class="hardware-note"><strong>Configuración autónoma:</strong> 3 beacons móviles = 2 cascos + 1 máquina. El reader ESP32 escanea BLE y aloja esta página sin Internet.</div>
+      <div class="hardware-note"><strong>Configuración autónoma:</strong> 3 beacons vehiculares y 3 readers LoRa. La posición representa el último sector confirmado, no una coordenada GPS.</div>
       <div class="layout-actions map-toolbar" aria-label="Herramientas del mapa">
         <label for="dxfFile" class="admin-layout-control button-primary" hidden>Importar DXF</label><input id="dxfFile" type="file" accept=".dxf">
         <button id="resetView" class="button-map" type="button">Centrar mapa</button>
@@ -92,13 +93,13 @@
     </section>
   </main>
 
-  <div class="alarm" id="alarm" hidden><span>!</span><div><strong id="alarmTitle">Ingreso a zona de peligro</strong><small id="alarmText"></small></div><button id="dismissAlarm" class="button-alarm" type="button">Confirmar</button></div>
+  <div class="alarm message-popup" id="alarm" hidden><span>!</span><div><strong id="alarmTitle">Mensaje operativo</strong><small id="alarmText"></small></div><button id="dismissAlarm" class="button-alarm" type="button">Ver mensaje</button></div>
   <div class="supervisor-backdrop" id="supervisorModal" hidden>
     <section class="supervisor-dialog" role="dialog" aria-modal="true" aria-labelledby="supervisorTitle">
       <div class="dialog-head"><div><span class="label">ACCESO RESTRINGIDO</span><h2 id="supervisorTitle">Panel del supervisor</h2></div><button id="supervisorClose" type="button" aria-label="Cerrar">×</button></div>
       <form id="loginForm" class="login-form"><label>Nombre del supervisor<input id="supervisorLoginName" maxlength="40" autocomplete="name" lang="es-CL" spellcheck="true" autocorrect="on" autocapitalize="words" inputmode="text" placeholder="Ej.: María Soto" required><small class="field-limit">Máximo 40 caracteres · revisión ortográfica solicitada al navegador</small></label><label>PIN de seis dígitos<span class="pin-input-wrap"><input id="supervisorPin" type="password" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" autocomplete="current-password" required><button class="pin-toggle" type="button" data-pin-target="supervisorPin" aria-label="Mostrar PIN" title="Mostrar PIN"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2 10s2.8-5 8-5 8 5 8 5-2.8 5-8 5-8-5-8-5Z"></path><circle cx="10" cy="10" r="2.2"></circle></svg></button></span><small>Ingresa los 6 dígitos para continuar.</small></label><button id="supervisorLoginSubmit" type="submit" disabled>Ingresar como supervisor</button><p id="loginError" role="alert"></p></form>
       <form id="messageForm" class="compose-form" hidden>
-        <div class="form-row"><label>Supervisor autenticado<input id="messageAuthor" maxlength="40" value="" readonly required><small id="messageAuthorCount" class="field-limit">Identidad asociada a esta sesión</small></label><label>Destino<select id="messageTarget"><option value="todos">Todos los TAG</option><option value="TAG-001">TAG-001 · Casco Operador A</option><option value="TAG-002">TAG-002 · Casco Operador B</option><option value="TAG-003">TAG-003 · Scoop LHD 01</option></select></label></div>
+        <div class="form-row"><label>Emisor autenticado<input id="messageAuthor" maxlength="40" value="" readonly required><small id="messageAuthorCount" class="field-limit">Identidad asociada a esta sesión</small></label><label>Destino<select id="messageTarget"><option value="todos">Todos los TAG</option><option value="TAG-001">TAG-001 · Vehículo minero 01</option><option value="TAG-002">TAG-002 · Vehículo minero 02</option><option value="TAG-003">TAG-003 · Vehículo minero 03</option></select></label></div>
         <label>Nivel<select id="messageLevel"><option value="informacion">Información</option><option value="atencion">Atención</option><option value="emergencia">Emergencia</option></select></label>
         <label>Título<input id="messageTitle" maxlength="70" lang="es-CL" spellcheck="true" autocorrect="on" autocapitalize="sentences" inputmode="text" autocomplete="off" required><small id="messageTitleCount" class="field-limit">0 / 70 caracteres · revisión ortográfica solicitada al navegador</small></label>
         <label>Mensaje<textarea id="messageBody" maxlength="500" rows="4" lang="es-CL" spellcheck="true" autocorrect="on" autocapitalize="sentences" inputmode="text" autocomplete="off" required></textarea><small id="messageBodyCount" class="field-limit">0 / 500 caracteres · revisión ortográfica solicitada al navegador</small></label>
@@ -114,14 +115,15 @@
         <button id="adminLoginSubmit" type="submit" disabled>Ingresar como administrador</button><p id="adminLoginError" role="alert"></p>
       </form>
       <section id="adminControls" class="admin-controls" hidden>
-        <div class="admin-role"><strong>Administrador autenticado</strong><small>Permiso exclusivo para mantenimiento y eliminación de registros.</small></div>
+        <div class="admin-role"><strong>Administrador autenticado</strong><small>Puede publicar mensajes operativos y efectuar mantenimiento de registros.</small></div>
+        <button id="adminComposeMessage" class="button-primary" type="button">Redactar mensaje operativo</button>
         <div class="admin-danger"><strong>Administración de historiales</strong><small>Estas acciones eliminan permanentemente la información almacenada.</small><div><button id="clearMessages" class="button-danger" type="button">Limpiar mensajes del supervisor</button><button id="clearEvents" class="button-danger" type="button">Limpiar historial de proximidad</button></div></div>
         <p id="adminStatus"></p><button id="logoutAdmin" class="button-tertiary" type="button">Cerrar sesión de administrador</button>
       </section>
     </section>
   </div>
-  <script src="/static/app.js?v=20260804-26"></script>
-  <script src="/static/rtls.js?v=20260804-17"></script>
-  <script src="/static/messages.js?v=20260804-27"></script>
+  <script src="/static/app.js?v=20260812-27"></script>
+  <script src="/static/rtls.js?v=20260812-18"></script>
+  <script src="/static/messages.js?v=20260812-28"></script>
 </body>
 </html>

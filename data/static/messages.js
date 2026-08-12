@@ -2,6 +2,11 @@ let supervisorAuthenticated = false;
 let adminAuthenticated = false;
 let currentSupervisorName = "";
 let supervisorMessages = [];
+const messagePopupSeenKey = "mina-local-message-popups-v1";
+let seenMessagePopups = new Set();
+try {
+  seenMessagePopups = new Set(JSON.parse(localStorage.getItem(messagePopupSeenKey) || "[]"));
+} catch (error) { console.warn("No fue posible recuperar mensajes vistos", error); }
 
 function initials(value, fallback = "--") {
   const words = String(value || "").trim().split(/\s+/).filter(Boolean);
@@ -103,7 +108,7 @@ function renderSupervisorMessages() {
       <div class="message-foot"><span>Emitido por ${esc(item.autor)}</span><time>${esc(messageTime(item.fecha))}</time></div>
       ${confirmed ? `<div class="message-ack"><span>✓ Caso tomado</span><strong>Confirmado por ${esc(item.confirmado_por)}</strong><time>${esc(messageTime(item.confirmado_fecha))}</time></div>` : ""}
       <div class="message-actions">
-        ${supervisorAuthenticated && item.vigente && !confirmed ? `<button class="confirm-message" data-message-id="${esc(item.id)}">${checkIcon}<span>Confirmar y tomar caso</span></button>` : ""}
+        ${(supervisorAuthenticated || adminAuthenticated) && item.vigente && !confirmed ? `<button class="confirm-message" data-message-id="${esc(item.id)}">${checkIcon}<span>Confirmar y tomar caso</span></button>` : ""}
         ${adminAuthenticated ? `<button class="delete-message" data-message-id="${esc(item.id)}">${trashIcon}<span>Eliminar mensaje</span></button>` : ""}
       </div>
     </article>`;
@@ -111,6 +116,35 @@ function renderSupervisorMessages() {
   document.querySelectorAll(".confirm-message").forEach(button => button.addEventListener("click", () => confirmMessage(button.dataset.messageId)));
   document.querySelectorAll(".delete-message").forEach(button => button.addEventListener("click", () => deleteMessage(button.dataset.messageId)));
   updatePendingTagAlerts();
+}
+
+function showNewMessagePopup() {
+  const pending = supervisorMessages.filter(item => item.vigente && !item.confirmado_por);
+  const fresh = pending.find(item => !seenMessagePopups.has(String(item.id)));
+  if (!fresh) return;
+
+  // Los mensajes que llegaron juntos quedan registrados; el más reciente se
+  // presenta en pantalla y todos permanecen disponibles en el módulo inferior.
+  pending.forEach(item => seenMessagePopups.add(String(item.id)));
+  try { localStorage.setItem(messagePopupSeenKey, JSON.stringify([...seenMessagePopups].slice(-80))); }
+  catch (error) { console.warn("No fue posible guardar mensajes vistos", error); }
+
+  const popup = $("alarm");
+  popup.className = `alarm message-popup ${fresh.nivel || "informacion"}`;
+  popup.dataset.messageId = fresh.id;
+  $("alarmTitle").textContent = fresh.titulo || "Mensaje operativo";
+  $("alarmText").textContent = `${fresh.mensaje} · Emitido por ${fresh.autor || "Supervisor"}`;
+  $("dismissAlarm").textContent = "Ver mensaje";
+  popup.hidden = false;
+}
+
+function syncMessageComposerAccess() {
+  const canPublish = supervisorAuthenticated || adminAuthenticated;
+  $("messageAuthor").value = supervisorAuthenticated
+    ? currentSupervisorName
+    : adminAuthenticated ? "Administrador" : "";
+  $("loginForm").hidden = canPublish;
+  $("messageForm").hidden = !canPublish;
 }
 
 window.focusSupervisorMessage = function focusSupervisorMessage(id) {
@@ -129,6 +163,7 @@ async function loadSupervisorMessages() {
     const response = await fetch("/api/mensajes", { cache: "no-store" });
     supervisorMessages = (await response.json()).mensajes || [];
     renderSupervisorMessages();
+    showNewMessagePopup();
   } catch (error) { console.error(error); }
 }
 
@@ -137,9 +172,7 @@ async function checkSupervisorSession() {
   const session = await response.json();
   supervisorAuthenticated = session.autenticado;
   currentSupervisorName = session.nombre || "";
-  $("messageAuthor").value = currentSupervisorName;
-  $("loginForm").hidden = supervisorAuthenticated;
-  $("messageForm").hidden = !supervisorAuthenticated;
+  syncMessageComposerAccess();
   renderSupervisorMessages();
   renderAccessRole();
 }
@@ -148,7 +181,7 @@ function openSupervisor() {
   $("supervisorModal").hidden = false;
   $("loginError").textContent = "";
   $("publishStatus").textContent = "";
-  checkSupervisorSession().then(() => { if (!supervisorAuthenticated) $("supervisorLoginName").focus(); });
+  checkSupervisorSession().then(() => { if (!supervisorAuthenticated && !adminAuthenticated) $("supervisorLoginName").focus(); });
 }
 
 function closeSupervisor() { $("supervisorModal").hidden = true; }
@@ -253,9 +286,7 @@ $("logoutSupervisor").addEventListener("click", async () => {
   await fetch("/api/supervisor/logout", { method: "POST" });
   supervisorAuthenticated = false;
   currentSupervisorName = "";
-  $("messageAuthor").value = "";
-  $("messageForm").hidden = true;
-  $("loginForm").hidden = false;
+  syncMessageComposerAccess();
   syncSupervisorLoginButton();
   renderSupervisorMessages();
   renderAccessRole();
@@ -267,6 +298,7 @@ async function checkAdminSession() {
   $("adminLoginForm").hidden = adminAuthenticated;
   $("adminControls").hidden = !adminAuthenticated;
   document.querySelectorAll(".admin-layout-control").forEach(control => control.hidden = !adminAuthenticated);
+  syncMessageComposerAccess();
   renderAssets();
   renderSupervisorMessages();
   renderAccessRole();
@@ -299,6 +331,7 @@ $("adminLoginForm").addEventListener("submit", async event => {
   $("adminLoginForm").hidden = true;
   $("adminControls").hidden = false;
   document.querySelectorAll(".admin-layout-control").forEach(control => control.hidden = false);
+  syncMessageComposerAccess();
   renderAssets();
   renderSupervisorMessages();
   renderAccessRole();
@@ -313,10 +346,16 @@ $("logoutAdmin").addEventListener("click", async () => {
   $("adminLoginForm").hidden = false;
   syncAdminLoginButton();
   document.querySelectorAll(".admin-layout-control").forEach(control => control.hidden = true);
+  syncMessageComposerAccess();
   $("adminStatus").textContent = "";
   renderAssets();
   renderSupervisorMessages();
   renderAccessRole();
+});
+
+$("adminComposeMessage").addEventListener("click", () => {
+  closeAdmin();
+  openSupervisor();
 });
 
 $("clearMessages").addEventListener("click", async () => {

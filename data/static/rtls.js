@@ -92,7 +92,21 @@ function tagNumber(tag) {
   return match ? match[1].padStart(2, "0") : "--";
 }
 
-function drawTagLabel(group, x, y, tag, placeBelow, pendingMessage = null) {
+function parkingPlacement(tag, index, project) {
+  const zone = mineLayout?.zonas_operativas?.[tag.reader_id];
+  if (!zone?.puntos?.length) return null;
+  const point = zone.puntos[index % zone.puntos.length];
+  const projected = project(point);
+  const plaza = tag.reader_id === "RX-01" ? mineLayout.plazas?.[index] : null;
+  return {
+    x: projected[0],
+    y: projected[1],
+    estado: plaza ? `${zone.estado} · Plaza ${plaza.id}` : zone.estado,
+    clase: tag.reader_id === "RX-01" ? "estacionado" : tag.reader_id === "RX-02" ? "ingresando" : "saliendo"
+  };
+}
+
+function drawTagLabel(group, x, y, tag, placeBelow, pendingMessage = null, operationalState = "") {
   const width = 178;
   const height = 44;
   const top = placeBelow ? y + 25 : y - height - 25;
@@ -102,7 +116,7 @@ function drawTagLabel(group, x, y, tag, placeBelow, pendingMessage = null) {
   group.appendChild(title);
   const detail = svgElement("text", {x, y: top + 33, class: "tag-label-detail", "text-anchor": "middle"});
   const distance = tag.distancia == null ? "sin distancia" : `${tag.distancia} m`;
-  detail.textContent = `${labels[tag.estado] || tag.estado} · ${distance}`;
+  detail.textContent = operationalState || `${labels[tag.estado] || tag.estado} · ${distance}`;
   group.appendChild(detail);
   if (pendingMessage) {
     const action = svgElement("g", {class: "tag-message-link", role: "button", tabindex: "0", "data-message-id": pendingMessage.id, "aria-label": `Abrir mensaje: ${pendingMessage.titulo}`});
@@ -150,10 +164,15 @@ function renderMine() {
   const tunnels = svgElement("g");
   for (const segment of mineLayout.segmentos || []) {
     const a = project(segment.a), b = project(segment.b);
-    tunnels.appendChild(svgElement("line", {x1: a[0], y1: a[1], x2: b[0], y2: b[1], class: "tunnel"}));
-    tunnels.appendChild(svgElement("line", {x1: a[0], y1: a[1], x2: b[0], y2: b[1], class: "tunnel-core"}));
+    const layer = String(segment.capa || "general").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    tunnels.appendChild(svgElement("line", {x1: a[0], y1: a[1], x2: b[0], y2: b[1], class: `tunnel layer-${layer}`}));
+    tunnels.appendChild(svgElement("line", {x1: a[0], y1: a[1], x2: b[0], y2: b[1], class: `tunnel-core layer-${layer}`}));
   }
   svg.appendChild(tunnels);
+  for (const plaza of mineLayout.plazas || []) {
+    const point = project([plaza.x, plaza.y, plaza.z || 0]);
+    drawText(svg, point[0], point[1] + 4, plaza.id, "parking-slot-label");
+  }
   for (const reader of mineLayout.readers || []) {
     const point = project([reader.x, reader.y, reader.z]);
     const group = svgElement("g", {class: `reader-node ${reader.disponible ? "active" : "pending"}`});
@@ -162,7 +181,9 @@ function renderMine() {
     drawText(group, point[0], point[1] + 34, `${reader.id} · ${reader.nombre}`);
     svg.appendChild(group);
   }
-  const tags = state.beacons.filter(item => Array.isArray(item.coordenadas));
+  const tags = state.beacons
+    .filter(item => Array.isArray(item.coordenadas) && item.estado !== "sin_senal")
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
   const offsets = new Map();
   const positions = [[46, -42], [52, 54], [-52, -45], [-56, 55], [88, 0], [-88, 0]];
   let selectedGroup = null;
@@ -172,14 +193,16 @@ function renderMine() {
     const base = project(tag.coordenadas);
     const offset = positions[count % positions.length];
     const ring = Math.floor(count / positions.length) * 30;
-    const x = base[0] + offset[0] + Math.sign(offset[0]) * ring;
-    const y = base[1] + offset[1] + Math.sign(offset[1] || 1) * ring;
-    const color = stateColors[tag.estado] || stateColors.sin_senal;
+    const parking = parkingPlacement(tag, count, project);
+    const x = parking?.x ?? base[0] + offset[0] + Math.sign(offset[0]) * ring;
+    const y = parking?.y ?? base[1] + offset[1] + Math.sign(offset[1] || 1) * ring;
+    const operationalColors = {estacionado: "#18a06f", ingresando: "#3182bd", saliendo: "#f2b705"};
+    const color = operationalColors[parking?.clase] || stateColors[tag.estado] || stateColors.sin_senal;
     const pendingMessage = window.pendingTagAlerts?.get(tag.id) || null;
     const pendingText = pendingMessage ? `, mensaje pendiente: ${pendingMessage.titulo}` : "";
-    const group = svgElement("g", {class: `tag-node ${tag.estado}${pendingMessage ? " has-pending-message" : ""}${selectedTagId === tag.id ? " selected" : ""}`, tabindex: "0", role: "button", "data-tag-id": tag.id, "aria-label": `${tag.id}, ${tag.nombre}, ${labels[tag.estado] || tag.estado}${pendingText}`});
+    const group = svgElement("g", {class: `tag-node ${tag.estado} ${parking?.clase || ""}${pendingMessage ? " has-pending-message" : ""}${selectedTagId === tag.id ? " selected" : ""}`, tabindex: "0", role: "button", "data-tag-id": tag.id, "aria-label": `${tag.id}, ${tag.nombre}, ${parking?.estado || labels[tag.estado] || tag.estado}${pendingText}`});
     const tooltip = svgElement("title");
-    tooltip.textContent = `${tag.id} · ${tag.nombre}\n${tag.tipo} · ${tag.persona}\nEstado: ${labels[tag.estado] || tag.estado}\nDistancia aproximada: ${tag.distancia == null ? "sin datos" : `${tag.distancia} m`}\nÚltimo reader: ${tag.reader_nombre || "sin reader"}`;
+    tooltip.textContent = `${tag.id} · ${tag.nombre}\n${tag.tipo} · ${tag.persona}\nEstado operativo: ${parking?.estado || labels[tag.estado] || tag.estado}\nDistancia aproximada: ${tag.distancia == null ? "sin datos" : `${tag.distancia} m`}\nÚltimo reader: ${tag.reader_nombre || "sin reader"}`;
     group.appendChild(tooltip);
     group.appendChild(svgElement("line", {x1: base[0], y1: base[1], x2: x, y2: y, stroke: color, "stroke-width": "2", "stroke-dasharray": "4 3"}));
     group.appendChild(svgElement("circle", {cx: x, cy: y, r: 19, class: "tag-marker", style: `fill:${color}`}));
@@ -190,7 +213,7 @@ function renderMine() {
       group.appendChild(svgElement("circle", {cx: x - 15, cy: y - 14, r: 7, class: "tag-message-alert"}));
       drawText(group, x - 15, y - 11.5, "!", "tag-message-alert-symbol");
     }
-    drawTagLabel(group, x, y, tag, offset[1] > 0, pendingMessage);
+    drawTagLabel(group, x, y, tag, parking ? tag.reader_id !== "RX-01" : offset[1] > 0, pendingMessage, parking?.estado || "");
     group.addEventListener("click", event => { event.stopPropagation(); selectMapTag(svg, group, tag.id); });
     group.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectMapTag(svg, group, tag.id); } });
     svg.appendChild(group);
@@ -198,7 +221,7 @@ function renderMine() {
   }
   svg.classList.toggle("has-tag-selection", Boolean(selectedGroup));
   if (selectedGroup) svg.appendChild(selectedGroup);
-  $("layoutStatus").textContent = `${mineLayout.nombre} · ${(mineLayout.segmentos || []).length} segmentos · ${tags.length} TAG ubicados`;
+  $("layoutStatus").textContent = `${mineLayout.nombre} · ${tags.length} vehículo${tags.length === 1 ? "" : "s"} detectado${tags.length === 1 ? "" : "s"}`;
   $("readerList").innerHTML = (mineLayout.readers || []).map(reader => `<article class="reader-card ${reader.disponible ? "active" : "pending"}"><strong><i></i>${esc(reader.id)} · ${esc(reader.nombre)}</strong><span>${esc(reader.sector)} · ${esc(reader.transporte)}</span><span>${reader.disponible ? "Disponible ahora" : "Pendiente de instalación"}</span></article>`).join("");
 }
 

@@ -1442,3 +1442,50 @@ button:not(.pin-toggle):not(.refresh-button):not(.dialog-head > button) {
   transition: transform .25s ease;
 }
 .map-toolbar > #refresh:hover .refresh-icon { transform: rotate(28deg); }
+
+/* Plano operacional del estacionamiento. */
+.dxf-download {
+  align-self: flex-end;
+  padding: 9px 12px;
+  border: 1px solid #b8c4be;
+  border-radius: 9px;
+  background: #fff;
+  color: #17211d;
+  font-size: .68rem;
+  font-weight: 850;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.dxf-download:hover { background: #f2f6f3; }
+#mineSvg .layer-plazas-estacionamiento {
+  stroke: #f3cf32;
+  stroke-width: 3;
+  opacity: .92;
+}
+#mineSvg .tunnel-core.layer-plazas-estacionamiento { stroke: #65581c; stroke-width: 1; }
+#mineSvg .layer-flecha-ingreso { stroke: #42bd7d; stroke-width: 5; opacity: 1; }
+#mineSvg .layer-flecha-salida { stroke: #f2b705; stroke-width: 5; opacity: 1; }
+#mineSvg .tunnel-core.layer-flecha-ingreso,
+#mineSvg .tunnel-core.layer-flecha-salida { stroke-width: 1.5; }
+.parking-slot-label {
+  fill: #f6df72 !important;
+  font-size: 11px !important;
+  font-weight: 900 !important;
+  letter-spacing: .04em;
+}
+.tag-node.estacionado .tag-marker { stroke: #b8ffd9; }
+.tag-node.ingresando .tag-marker { stroke: #c4e8ff; }
+.tag-node.saliendo .tag-marker { stroke: #fff0ad; }
+
+/* El popup queda reservado a mensajes publicados, no a proximidad automática. */
+.alarm.message-popup { background: #176f9f; border-color: #bfe5f8; }
+.alarm.message-popup > span { color: #176f9f; }
+.alarm.message-popup.informacion { background: #176f9f; border-color: #bfe5f8; }
+.alarm.message-popup.atencion { background: #a86e00; border-color: #ffe09a; }
+.alarm.message-popup.emergencia { background: #9f2e26; border-color: #ffb9b2; }
+.alarm.message-popup .button-alarm { color: #17211d !important; }
+
+@media (max-width: 620px) {
+  .rtls-head { align-items: stretch; }
+  .dxf-download { align-self: stretch; text-align: center; }
+}

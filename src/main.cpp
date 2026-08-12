@@ -55,9 +55,9 @@ struct ReaderConfig {
 };
 
 constexpr ReaderConfig READERS[] = {
-    {"RX-01", "Heltec Reader 1 RX-01", "Portal y sala de control", 20, 78, 0},
-    {"RX-02", "Heltec Reader 2 RX-02", "Rampa", 48, 50, -50},
-    {"RX-03", "Heltec Reader 3 RX-03", "Frente de trabajo", 82, 24, -100},
+    {"RX-01", "Heltec Reader 1 RX-01", "Estacionamiento principal", 60, 52, 0},
+    {"RX-02", "Heltec Reader 2 RX-02", "Camino de ingreso", 12, 50, 0},
+    {"RX-03", "Heltec Reader 3 RX-03", "Camino de salida", 108, 50, 0},
 };
 constexpr size_t READER_COUNT = sizeof(READERS) / sizeof(READERS[0]);
 constexpr size_t LOCAL_READER_INDEX = MINA_READER_NUMBER - 1;
@@ -167,12 +167,12 @@ struct SupervisorMessage {
 };
 
 TagState tags[] = {
-    {"TAG-001", "Casco minero 01", "TAG de persona", "persona", "Operador A",
-     "Montado en casco o lámpara minera", 0, 0},
-    {"TAG-002", "Casco minero 02", "TAG de persona", "persona", "Operador B",
-     "Montado en casco o lámpara minera", 1, 0},
-    {"TAG-003", "Scoop LHD 01", "TAG de maquinaria", "maquinaria", "Equipo móvil",
-     "Fijado en cabina o estructura protegida", 2, 0},
+    {"TAG-001", "Vehículo minero 01", "TAG vehicular", "maquinaria", "Vehículo 01",
+     "Instalado en cabina o parabrisas", 0, 0},
+    {"TAG-002", "Vehículo minero 02", "TAG vehicular", "maquinaria", "Vehículo 02",
+     "Instalado en cabina o parabrisas", 1, 0},
+    {"TAG-003", "Vehículo minero 03", "TAG vehicular", "maquinaria", "Vehículo 03",
+     "Instalado en cabina o parabrisas", 2, 0},
 };
 constexpr size_t TAG_COUNT = sizeof(tags) / sizeof(tags[0]);
 
@@ -661,8 +661,8 @@ int findMessage(const String& id) {
 }
 
 void publishMessage() {
-  if (supervisorName.isEmpty()) {
-    server.send(401, "text/plain; charset=utf-8", "Sesión de supervisor requerida");
+  if (supervisorName.isEmpty() && !adminAuthenticated) {
+    server.send(401, "text/plain; charset=utf-8", "Sesión de supervisor o administrador requerida");
     return;
   }
   JsonDocument body;
@@ -688,12 +688,13 @@ void publishMessage() {
   }
   SupervisorMessage& message = messages[0];
   message.used = true;
-  message.id = String(millis()) + "-msg";
+  const uint64_t messageMoment = epochNow();
+  message.id = String(messageMoment != 0 ? messageMoment : millis()) + "-msg";
   message.target = target;
   message.level = level;
   message.title = title;
   message.body = text;
-  message.author = supervisorName;
+  message.author = supervisorName.isEmpty() ? "Administrador" : supervisorName;
   message.timestamp = epochNow();
   message.active = true;
   message.confirmedBy = "";
@@ -702,7 +703,7 @@ void publishMessage() {
   JsonDocument response;
   JsonArray array = response.to<JsonArray>();
   appendMessageJson(array, message);
-  server.send(201, "application/json; charset=utf-8", server.arg("plain"));
+  sendJson(201, response);
 }
 
 void handleDynamicApi() {
@@ -717,11 +718,11 @@ void handleDynamicApi() {
       return;
     }
     if (confirm && server.method() == HTTP_POST) {
-      if (supervisorName.isEmpty()) {
-        server.send(401, "text/plain; charset=utf-8", "Sesión de supervisor requerida");
+      if (supervisorName.isEmpty() && !adminAuthenticated) {
+        server.send(401, "text/plain; charset=utf-8", "Sesión de supervisor o administrador requerida");
         return;
       }
-      messages[index].confirmedBy = supervisorName;
+      messages[index].confirmedBy = supervisorName.isEmpty() ? "Administrador" : supervisorName;
       messages[index].confirmedAt = epochNow();
       messages[index].active = false;
       saveMessages();
@@ -1377,9 +1378,9 @@ void startLoRa() {
 }
 
 const char* oledSectorLabel() {
-  if (LOCAL_READER_INDEX == 0) return "Portal / Control";
-  if (LOCAL_READER_INDEX == 1) return "Rampa";
-  return "Frente de trabajo";
+  if (LOCAL_READER_INDEX == 0) return "Estacionamiento";
+  if (LOCAL_READER_INDEX == 1) return "Camino ingreso";
+  return "Camino salida";
 }
 
 void renderOledStatus() {

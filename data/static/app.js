@@ -1,4 +1,4 @@
-const state = { beacons: [], events: [], coordination: null, socket: null, lastDangerIds: new Set(), showAll: false };
+const state = { beacons: [], events: [], coordination: null, socket: null, showAll: false };
 const $ = id => document.getElementById(id);
 const esc = value => String(value ?? "").replace(/[&<>'"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" }[c]));
 const labels = { peligro: "Peligro", precaucion: "Precaución", proximo: "Próximo", seguro: "Seguro", sin_senal: "Sin señal" };
@@ -28,7 +28,6 @@ function render(data) {
   $("updated").textContent = `Actualizado ${formatTime(data.actualizado)}`;
   renderAssets();
   renderEvents();
-  showDangerAlarm();
   if (typeof updatePendingTagAlerts === "function") updatePendingTagAlerts(false);
   if (typeof window.renderMineTracking === "function") window.renderMineTracking();
 }
@@ -65,16 +64,6 @@ function renderEvents() {
   $("events").innerHTML = items.length ? items.map(event => `<div class="event ${esc(event.estado)}"><i class="event-mark"></i><div><strong>${esc(event.nombre)} · ${esc(labels[event.estado] || event.estado)}</strong><small>${esc(labels[event.anterior] || event.anterior)} → ${esc(labels[event.estado] || event.estado)}${event.distancia == null ? "" : ` · ${esc(event.distancia)} m`}</small></div><time>${esc(formatTime(event.fecha))}</time></div>`).join("") : '<div class="empty">Aún no hay cambios de estado.</div>';
 }
 
-function showDangerAlarm() {
-  const dangerous = state.beacons.filter(item => item.estado === "peligro");
-  const fresh = dangerous.find(item => !state.lastDangerIds.has(item.id));
-  state.lastDangerIds = new Set(dangerous.map(item => item.id));
-  if (!fresh) return;
-  $("alarmTitle").textContent = `${fresh.nombre} en zona de peligro`;
-  $("alarmText").textContent = `Distancia estimada ${fresh.distancia} m · ${trends[fresh.tendencia] || fresh.tendencia}`;
-  $("alarm").hidden = false;
-}
-
 async function fetchState() {
   const response = await fetch("/api/estado", { cache: "no-store" });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -101,7 +90,14 @@ async function refreshLocalState() {
 
 $("refresh").addEventListener("click", refreshLocalState);
 $("eventsToggle").addEventListener("click", event => { state.showAll = !state.showAll; event.currentTarget.textContent = state.showAll ? "Ver resumen" : "Ver todos"; renderEvents(); });
-$("dismissAlarm").addEventListener("click", () => $("alarm").hidden = true);
+$("dismissAlarm").addEventListener("click", () => {
+  const messageId = $("alarm").dataset.messageId;
+  $("alarm").hidden = true;
+  delete $("alarm").dataset.messageId;
+  if (messageId && typeof window.focusSupervisorMessage === "function") {
+    window.focusSupervisorMessage(messageId);
+  }
+});
 fetch("/api/reloj", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
