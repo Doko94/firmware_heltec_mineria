@@ -4,25 +4,26 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#17211f">
-  <title>Proximidad minera BLE</title>
+  <title>Control de turno minero BLE</title>
   <link rel="stylesheet" href="/static/styles.css">
   <link rel="stylesheet" href="/static/rtls.css">
   <link rel="stylesheet" href="/static/tag-types.css">
   <link rel="stylesheet" href="/static/hardware-note.css">
   <link rel="stylesheet" href="/static/messages.css">
+  <link rel="stylesheet" href="/static/gps.css?v=20260813-02">
   <link rel="stylesheet" href="/static/supervisor-fix.css">
   <link rel="stylesheet" href="/static/groundhog-theme.css">
-  <link rel="stylesheet" href="/static/contrast-cards.css?v=20260812-36">
+  <link rel="stylesheet" href="/static/contrast-cards.css?v=20260813-40">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark">M</span><div><span>CONTROL DE PROXIMIDAD</span><strong>Operación minera BLE</strong></div></div>
+    <div class="brand"><span class="brand-mark">M</span><div><span>CONTROL DE TURNO</span><strong>Oficina minera BLE</strong></div></div>
     <div class="top-actions"><div id="accessRole" class="role-indicator public" aria-live="polite"><span id="accessRoleIcon">VP</span><div><strong id="accessRoleTitle">Vista pública</strong><small id="accessRoleDetail">Sin sesión iniciada</small></div></div><button id="supervisorOpen" type="button">Supervisor</button><button id="adminOpen" class="admin-open" type="button">Administrador</button><div class="connection" id="connection"><i></i><span>Conectando</span></div></div>
   </header>
 
   <main>
     <section class="hero">
-      <div><span class="kicker">CONTROL VEHICULAR LOCAL · SIN INTERNET</span><h1>Vehículos dentro y fuera del estacionamiento minero</h1><p>Los TAG vehiculares permiten distinguir equipos estacionados, ingresando por el acceso o saliendo hacia la ruta minera.</p></div>
+      <div><span class="kicker">CONTROL DE PERSONAL LOCAL · SIN INTERNET</span><h1>Ingreso, presencia y salida del turno minero</h1><p>Los beacons personales permiten confirmar el paso por portería, la presencia en la oficina y la salida al finalizar el turno.</p></div>
     </section>
 
     <section class="receiver">
@@ -39,8 +40,26 @@
       <article class="metric offline"><span>Sin señal</span><strong id="countOffline">3</strong><small>requieren revisión</small></article>
     </section>
 
-    <section class="section-head"><div><span class="label">SEGUIMIENTO EN VIVO</span><h2>Beacons móviles</h2></div><span id="updated">Esperando señales</span></section>
+    <section class="section-head"><div><span class="label">SEGUIMIENTO EN VIVO</span><h2>Personal con beacon</h2></div><span id="updated">Esperando señales</span></section>
     <section class="asset-grid" id="assetGrid"></section>
+
+    <section class="shift-module" aria-labelledby="shiftTitle">
+      <div class="shift-head"><div><span class="label">NÓMINA DEL DÍA</span><h2 id="shiftTitle">Control del turno día</h2><p>Horario configurado: 08:00–20:00 · tolerancia informativa de ingreso: 10 minutos.</p></div><span id="shiftUpdated">Esperando detecciones</span></div>
+      <div class="shift-metrics" aria-label="Resumen de asistencia">
+        <article><span>Esperados</span><strong id="shiftExpected">3</strong><small>Nómina configurada</small></article>
+        <article class="entering"><span>Ingresando</span><strong id="shiftEntering">0</strong><small>Confirmados por RX02</small></article>
+        <article class="present"><span>En turno</span><strong id="shiftPresent">0</strong><small>Confirmados por RX01</small></article>
+        <article class="leaving"><span>Saliendo</span><strong id="shiftLeaving">0</strong><small>Confirmados por RX03</small></article>
+        <article class="missing"><span>Fuera o sin señal</span><strong id="shiftMissing">3</strong><small>Sin presencia vigente</small></article>
+      </div>
+      <div class="shift-table-wrap">
+        <table class="shift-table">
+          <thead><tr><th>Persona</th><th>Asignación</th><th>Turno</th><th>Estado</th><th>Última ubicación</th><th>Marcaciones</th></tr></thead>
+          <tbody id="shiftRows"><tr><td colspan="6">Cargando nómina…</td></tr></tbody>
+        </table>
+      </div>
+      <p class="shift-note">La ubicación corresponde al último sector confirmado por un RX. No representa una coordenada GPS ni reemplaza el control formal de asistencia.</p>
+    </section>
 
     <section class="message-module">
       <div class="message-head"><div><span class="label">COMUNICACIONES OPERACIONALES</span><h2>Mensajes del supervisor</h2><p>Instrucciones visibles en este portal, asociadas a todos o a un TAG específico.</p></div><span id="messageCount">0 vigentes</span></div>
@@ -49,15 +68,15 @@
 
     <section class="rtls-module">
       <div class="rtls-head">
-        <div><span class="label">ESTACIONAMIENTO MINA COLLAHUASI · CONFIGURACIÓN CONCEPTUAL</span><h2>Control local de aparcamientos</h2><p>RX01 ordena los vehículos detectados en plazas; RX02 marca el ingreso y RX03 la salida hacia el camino minero.</p></div>
-                <a class="dxf-download" href="/static/parking.dxf" download="estacionamiento_collahuasi_conceptual.dxf">Descargar DXF</a>
+        <div><span class="label">OFICINA MINERA · CONFIGURACIÓN CONCEPTUAL</span><h2>Recorrido de control de turno</h2><p>RX02 registra el ingreso en portería, RX01 confirma presencia en el punto de formación y RX03 registra la salida del personal.</p></div>
+        <a class="dxf-download" href="/static/oficina_turno.dxf" download="oficina_minera_control_turno.dxf">Descargar DXF</a>
       </div>
       <div class="tag-explainer">
-        <article><span class="tag-symbol machine">V</span><div><strong>TAG vehicular</strong><small>Se instala protegido en la cabina o parabrisas de cada vehículo monitoreado.</small></div></article>
-        <article><span class="tag-symbol reader">R1</span><div><strong>RX01 · Estacionamiento</strong><small>Confirma presencia dentro del recinto y asigna visualmente una plaza disponible.</small></div></article>
-        <article><span class="tag-symbol reader">R2</span><div><strong>RX02 / RX03 · Caminos</strong><small>Distinguen un vehículo ingresando al aparcamiento o saliendo hacia la ruta.</small></div></article>
+        <article><span class="tag-symbol person">P</span><div><strong>Beacon personal</strong><small>Se instala protegido en el casco, lámpara o credencial del trabajador.</small></div></article>
+        <article><span class="tag-symbol reader">R1</span><div><strong>RX01 · Interior</strong><small>Confirma presencia en el punto de formación y oficina minera.</small></div></article>
+        <article><span class="tag-symbol reader">R2</span><div><strong>RX02 / RX03 · Accesos</strong><small>Registran el ingreso por portería y la salida al terminar el turno.</small></div></article>
       </div>
-      <div class="hardware-note"><strong>Configuración autónoma:</strong> 3 beacons vehiculares y 3 readers LoRa. La posición representa el último sector confirmado, no una coordenada GPS.</div>
+      <div class="hardware-note"><strong>Configuración autónoma:</strong> los beacons vinculados a un mismo RX se ordenan automáticamente en una grilla. Toca un punto numerado para abrir su identificación; la posición representa el último sector confirmado, no una coordenada GPS.</div>
       <div class="layout-actions map-toolbar" aria-label="Herramientas del mapa">
         <label for="dxfFile" class="admin-layout-control button-primary" hidden>Importar DXF</label><input id="dxfFile" type="file" accept=".dxf">
         <button id="resetView" class="button-map" type="button">Centrar mapa</button>
@@ -66,12 +85,69 @@
         <button id="mapZoomOut" class="button-map zoom-only" type="button" aria-label="Alejar mapa" title="Alejar mapa"><svg class="zoom-icon" viewBox="0 0 32 32" aria-hidden="true"><circle cx="13.5" cy="13.5" r="8.5"></circle><path d="m20 20 7 7M9.5 13.5h8"></path></svg></button>
       </div>
       <div class="mine-layout">
-        <svg id="mineSvg" viewBox="0 0 1000 560" role="img" aria-label="Layout tridimensional de la mina"></svg>
+        <svg id="mineSvg" viewBox="0 0 1000 560" role="img" aria-label="Plano conceptual de la oficina minera y el recorrido del turno"></svg>
         <div class="map-help">Rueda o botones para zoom · arrastra para desplazarte</div>
         <div class="depth-legend"><span>Superficie</span><i></i><span>Mayor profundidad</span></div>
         <div class="map-status" id="layoutStatus">Cargando layout…</div>
       </div>
+      <article id="tagGpsSelection" class="tag-gps-selection" hidden>
+        <div class="tag-gps-avatar" aria-hidden="true">GPS</div>
+        <div><span class="label">PERSONA SELECCIONADA</span><h3 id="tagGpsSelectionName">Trabajador 01 - Supervisor</h3><p id="tagGpsSelectionStatus">Comprobando presencia BLE y geotracker…</p></div>
+        <button id="tagGpsSelectionOpen" class="button-primary" type="button">Ver ubicación GPS</button>
+      </article>
       <div class="reader-list" id="readerList"></div>
+    </section>
+
+    <section class="gps-module" id="gpsModule" aria-labelledby="gpsTitle">
+      <div class="gps-head"><div><span class="label">UBICACIÓN EXTERIOR · GNSS LOCAL</span><h2 id="gpsTitle">Trabajador 01 - Supervisor</h2><p>El beacon TAG-001 confirma el sector dentro del DXF; el SenseCAP T1000-E permite consultar la última posición exterior aunque el trabajador ya no esté dentro del alcance BLE.</p></div><span class="gps-node">!f72ad896</span></div>
+      <div class="gps-summary">
+        <article><span>Fuente activa</span><strong id="gpsSource">T1000-E</strong><small id="gpsBleState">Esperando estado BLE</small></article>
+        <article><span>Último punto GNSS</span><strong id="gpsFreshness">Acceso protegido</strong><small id="gpsLastFix">Inicia sesión para consultar</small></article>
+        <article><span>Equipo</span><strong>Trabajador 01</strong><small id="gpsBattery">Batería reservada</small></article>
+      </div>
+      <div class="gps-actions">
+        <button id="gpsOpen" class="button-primary" type="button">Ver trabajador por GPS</button>
+        <button id="gpsRefresh" class="button-secondary" type="button">Actualizar estado</button>
+        <p id="gpsAccessNote">Las coordenadas exactas solo son visibles para supervisor o administrador.</p>
+      </div>
+      <div id="gpsPanel" class="gps-panel" hidden>
+        <div class="gps-panel-head"><div><span class="label">MAPA GPS OFFLINE</span><h3>Última ubicación y trayectoria recibida</h3><p id="gpsCoordinates">Sin coordenadas autorizadas</p></div><button id="gpsClose" class="button-secondary" type="button">Cerrar mapa</button></div>
+        <div class="gps-map-wrap">
+          <div class="gps-map-controls" aria-label="Controles del mapa GPS"><button id="gpsMapZoomOut" type="button" aria-label="Alejar mapa">−</button><button id="gpsMapCenter" type="button">Centrar</button><button id="gpsMapZoomIn" type="button" aria-label="Acercar mapa">+</button></div>
+          <svg id="gpsSvg" viewBox="0 0 1000 520" role="img" aria-label="Mapa GPS offline del Trabajador 01"></svg>
+          <span class="gps-north" aria-hidden="true">N ↑</span>
+          <span class="gps-map-caption" id="gpsMapCaption">Mapa offline de Iquique · © OpenStreetMap contributors · ODbL</span>
+        </div>
+        <div class="gps-map-meta"><span id="gpsArea">Sector: calculando…</span><span id="gpsAltitude">Altitud: --</span><span id="gpsPrecision">Precisión transmitida: --</span><span id="gpsPointCount">Puntos: 0</span></div>
+        <p class="gps-georef-note"><strong>Cartografía local instalada:</strong> el mapa urbano de Iquique funciona sin Internet. Si el tracker sale de esta cobertura, se mostrará la cuadrícula GNSS y será necesario instalar el paquete cartográfico de la nueva zona.</p>
+      </div>
+    </section>
+
+    <section class="reports-module" aria-labelledby="reportsTitle">
+      <div class="reports-head">
+        <div><span class="label">HISTORIAL Y REPORTES</span><h2 id="reportsTitle">Trazabilidad del personal</h2><p>Consulta cambios confirmados de proximidad y movimientos entre acceso, oficina y salida.</p></div>
+        <button id="exportReport" class="button-primary report-export" type="button">Exportar CSV</button>
+      </div>
+      <div class="report-metrics" aria-label="Resumen del historial">
+        <article><span>Eventos guardados</span><strong id="reportEventCount">0</strong><small id="reportCapacity">Capacidad: 120</small></article>
+        <article><span>Personas detectadas</span><strong id="reportActiveCount">0</strong><small>Lectura actual confirmada</small></article>
+        <article><span>En turno</span><strong id="reportParkedCount">0</strong><small>Último reader RX01</small></article>
+        <article><span>Movimientos de sector</span><strong id="reportMovementCount">0</strong><small>Ingreso, aparcamiento o salida</small></article>
+      </div>
+      <div class="report-filters">
+        <label>Persona<select id="reportTagFilter"><option value="todos">Todas</option><option value="TAG-001">TAG-001 · Trabajador 01</option><option value="TAG-002">TAG-002 · Trabajador 02</option><option value="TAG-003">TAG-003 · Trabajador 03</option></select></label>
+        <label>Ubicación<select id="reportReaderFilter"><option value="todos">Todas</option><option value="RX-01">RX01 · Punto de formación</option><option value="RX-02">RX02 · Portería</option><option value="RX-03">RX03 · Salida</option></select></label>
+        <label>Tipo de evento<select id="reportTypeFilter"><option value="todos">Todos</option><option value="sector">Cambio de sector</option><option value="estado">Cambio de proximidad</option></select></label>
+        <label>Período<select id="reportPeriodFilter"><option value="0">Todo el historial</option><option value="8">Últimas 8 horas</option><option value="24">Últimas 24 horas</option></select></label>
+        <button id="refreshReports" class="button-secondary" type="button">Actualizar reporte</button>
+      </div>
+      <div class="report-table-wrap">
+        <table class="report-table">
+          <thead><tr><th>Fecha</th><th>Persona</th><th>Evento</th><th>Sector</th><th>Distancia</th><th>RSSI</th></tr></thead>
+          <tbody id="reportRows"><tr><td colspan="6">Cargando historial…</td></tr></tbody>
+        </table>
+      </div>
+      <p id="reportStatus" class="report-status" role="status" aria-live="polite"></p>
     </section>
 
     <section class="operations">
@@ -99,7 +175,7 @@
       <div class="dialog-head"><div><span class="label">ACCESO RESTRINGIDO</span><h2 id="supervisorTitle">Panel del supervisor</h2></div><button id="supervisorClose" type="button" aria-label="Cerrar">×</button></div>
       <form id="loginForm" class="login-form"><label>Nombre del supervisor<input id="supervisorLoginName" maxlength="40" autocomplete="name" lang="es-CL" spellcheck="true" autocorrect="on" autocapitalize="words" inputmode="text" placeholder="Ej.: María Soto" required><small class="field-limit">Máximo 40 caracteres · revisión ortográfica solicitada al navegador</small></label><label>PIN de seis dígitos<span class="pin-input-wrap"><input id="supervisorPin" type="password" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" autocomplete="current-password" required><button class="pin-toggle" type="button" data-pin-target="supervisorPin" aria-label="Mostrar PIN" title="Mostrar PIN"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2 10s2.8-5 8-5 8 5 8 5-2.8 5-8 5-8-5-8-5Z"></path><circle cx="10" cy="10" r="2.2"></circle></svg></button></span><small>Ingresa los 6 dígitos para continuar.</small></label><button id="supervisorLoginSubmit" type="submit" disabled>Ingresar como supervisor</button><p id="loginError" role="alert"></p></form>
       <form id="messageForm" class="compose-form" hidden>
-        <div class="form-row"><label>Emisor autenticado<input id="messageAuthor" maxlength="40" value="" readonly required><small id="messageAuthorCount" class="field-limit">Identidad asociada a esta sesión</small></label><label>Destino<select id="messageTarget"><option value="todos">Todos los TAG</option><option value="TAG-001">TAG-001 · Vehículo minero 01</option><option value="TAG-002">TAG-002 · Vehículo minero 02</option><option value="TAG-003">TAG-003 · Vehículo minero 03</option></select></label></div>
+        <div class="form-row"><label>Emisor autenticado<input id="messageAuthor" maxlength="40" value="" readonly required><small id="messageAuthorCount" class="field-limit">Identidad asociada a esta sesión</small></label><label>Destino<select id="messageTarget"><option value="todos">Todo el personal</option><option value="TAG-001">TAG-001 · Trabajador minero 01</option><option value="TAG-002">TAG-002 · Trabajador minero 02</option><option value="TAG-003">TAG-003 · Trabajador minero 03</option></select></label></div>
         <label>Nivel<select id="messageLevel"><option value="informacion">Información</option><option value="atencion">Atención</option><option value="emergencia">Emergencia</option></select></label>
         <label>Título<input id="messageTitle" maxlength="70" lang="es-CL" spellcheck="true" autocorrect="on" autocapitalize="sentences" inputmode="text" autocomplete="off" required><small id="messageTitleCount" class="field-limit">0 / 70 caracteres · revisión ortográfica solicitada al navegador</small></label>
         <label>Mensaje<textarea id="messageBody" maxlength="500" rows="4" lang="es-CL" spellcheck="true" autocorrect="on" autocapitalize="sentences" inputmode="text" autocomplete="off" required></textarea><small id="messageBodyCount" class="field-limit">0 / 500 caracteres · revisión ortográfica solicitada al navegador</small></label>
@@ -122,8 +198,9 @@
       </section>
     </section>
   </div>
-  <script src="/static/app.js?v=20260812-27"></script>
-  <script src="/static/rtls.js?v=20260812-18"></script>
-  <script src="/static/messages.js?v=20260812-28"></script>
+  <script src="/static/app.js?v=20260813-29"></script>
+  <script src="/static/rtls.js?v=20260813-21"></script>
+  <script src="/static/messages.js?v=20260813-29"></script>
+  <script src="/static/gps.js?v=20260813-02"></script>
 </body>
 </html>

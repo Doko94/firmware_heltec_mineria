@@ -54,6 +54,11 @@ function renderAccessRole() {
     $("accessRoleTitle").textContent = "Vista pública";
     $("accessRoleDetail").textContent = "Sin sesión iniciada";
   }
+  window.dispatchEvent(new CustomEvent("mina:access-change", {detail: {
+    supervisor: supervisorAuthenticated,
+    administrator: adminAuthenticated,
+    authorized: supervisorAuthenticated || adminAuthenticated
+  }}));
 }
 
 function messageTime(value) {
@@ -103,7 +108,7 @@ function renderSupervisorMessages() {
     const confirmed = Boolean(item.confirmado_por);
     const status = confirmed ? "Confirmado" : item.vigente ? "Pendiente" : "Finalizado";
     return `<article class="supervisor-message ${esc(item.nivel)} ${confirmed ? "confirmed" : ""}" data-message-id="${esc(item.id)}" tabindex="-1">
-      <div class="message-meta"><span class="message-context"><span class="message-level-icon">${messageLevelIcon(item.nivel)}</span><span>${esc(item.destino === "todos" ? "Todos los TAG" : item.destino)} · ${esc(item.nivel)}</span></span><span class="message-status">${status}</span></div>
+      <div class="message-meta"><span class="message-context"><span class="message-level-icon">${messageLevelIcon(item.nivel)}</span><span>${esc(item.destino === "todos" ? "Todo el personal" : item.destino)} · ${esc(item.nivel)}</span></span><span class="message-status">${status}</span></div>
       <h3>${esc(item.titulo)}</h3><p>${esc(item.mensaje)}</p>
       <div class="message-foot"><span>Emitido por ${esc(item.autor)}</span><time>${esc(messageTime(item.fecha))}</time></div>
       ${confirmed ? `<div class="message-ack"><span>✓ Caso tomado</span><strong>Confirmado por ${esc(item.confirmado_por)}</strong><time>${esc(messageTime(item.confirmado_fecha))}</time></div>` : ""}
@@ -183,6 +188,7 @@ function openSupervisor() {
   $("publishStatus").textContent = "";
   checkSupervisorSession().then(() => { if (!supervisorAuthenticated && !adminAuthenticated) $("supervisorLoginName").focus(); });
 }
+window.openSupervisorPanel = openSupervisor;
 
 function closeSupervisor() { $("supervisorModal").hidden = true; }
 

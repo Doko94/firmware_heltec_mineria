@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "node_id": "!f72ad896",
+  "node_num": 4146780310,
+  "beacon_id": "TAG-001",
+  "asset_type": "trabajador",
+  "display_name": "Trabajador 01 - Supervisor",
+  "hardware": "SenseCAP Tracker T1000-E",
+  "position": {
+    "latitude": -20.2730050,
+    "longitude": -70.1294650,
+    "altitude": 83.0,
+    "timestamp": 1786640044000,
+    "battery_level": 101,
+    "voltage": 4.13,
+    "precision_bits": 32,
+    "source": "usb_snapshot"
+  },
+  "history": [
+    {
+      "latitude": -20.2730050,
+      "longitude": -70.1294650,
+      "altitude": 83.0,
+      "timestamp": 1786640044000,
+      "battery_level": 101,
+      "voltage": 4.13,
+      "precision_bits": 32,
+      "source": "usb_snapshot"
+    }
+  ]
+}

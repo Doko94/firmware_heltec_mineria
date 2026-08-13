@@ -55,9 +55,9 @@ struct ReaderConfig {
 };
 
 constexpr ReaderConfig READERS[] = {
-    {"RX-01", "Heltec Reader 1 RX-01", "Estacionamiento principal", 60, 52, 0},
-    {"RX-02", "Heltec Reader 2 RX-02", "Camino de ingreso", 12, 50, 0},
-    {"RX-03", "Heltec Reader 3 RX-03", "Camino de salida", 108, 50, 0},
+    {"RX-01", "Heltec Reader 1 RX-01", "Punto de formacion y oficina", 66, 38, 0},
+    {"RX-02", "Heltec Reader 2 RX-02", "Porteria y control de acceso", 27, 50, 0},
+    {"RX-03", "Heltec Reader 3 RX-03", "Salida de personal", 110, 15, 0},
 };
 constexpr size_t READER_COUNT = sizeof(READERS) / sizeof(READERS[0]);
 constexpr size_t LOCAL_READER_INDEX = MINA_READER_NUMBER - 1;
@@ -78,6 +78,11 @@ constexpr char ADMIN_PIN[] = "12345";
 constexpr uint8_t DNS_PORT = 53;
 constexpr uint32_t TAG_TIMEOUT_MS = 12000;
 constexpr uint32_t STATE_REFRESH_MS = 500;
+constexpr uint32_t STATE_CONFIRM_MS = 900;
+constexpr uint8_t STATE_CONFIRM_OBSERVATIONS = 2;
+constexpr uint32_t READER_SWITCH_CONFIRM_MS = 1200;
+constexpr uint8_t READER_SWITCH_OBSERVATIONS = 2;
+constexpr uint8_t RSSI_WINDOW_SIZE = 5;
 constexpr uint32_t READER_HEARTBEAT_TIMEOUT_MS = 9000;
 constexpr uint32_t PORTAL_ELECTION_GRACE_MS = 6500;
 // Primero se intenta el BSSID conocido de RX-02. Si no responde, RX-03
@@ -87,12 +92,16 @@ constexpr uint32_t STARTUP_CONNECT_TIMEOUT_MS = 2200;
 constexpr uint32_t STA_CONNECT_TIMEOUT_MS = 3000;
 constexpr uint32_t STA_RETRY_INTERVAL_MS = 4000;
 constexpr uint32_t EMERGENCY_RECOVERY_PROBE_MS = 6000;
-constexpr float READER_SWITCH_FACTOR = 0.75F;
+constexpr float READER_SWITCH_FACTOR = 0.78F;
 constexpr char READER_TOKEN[] = "mina-local-rx-2026";
 // El teléfono ve un único nombre de red, independientemente del reader activo.
 constexpr char EMERGENCY_SSID[] = "MINA-LOCAL";
-constexpr size_t MAX_EVENTS = 30;
+constexpr size_t MAX_EVENTS = 120;
 constexpr size_t MAX_MESSAGES = 16;
+constexpr size_t MAX_GPS_POINTS = 48;
+constexpr char GPS_NODE_ID[] = "!f72ad896";
+constexpr uint32_t GPS_NODE_NUM = 4146780310UL;
+constexpr char GPS_BEACON_ID[] = "TAG-001";
 constexpr uint32_t LORA_TX_INTERVAL_MS = 1800;
 constexpr float LORA_FREQUENCY_MHZ = 915.0F;
 constexpr float LORA_BANDWIDTH_KHZ = 125.0F;
@@ -108,6 +117,11 @@ struct ReaderObservation {
   float filteredRssi = -127.0F;
   float distance = 0.0F;
   uint32_t lastSeen = 0;
+  int8_t rssiWindow[RSSI_WINDOW_SIZE] = {-127, -127, -127, -127, -127};
+  uint8_t windowCount = 0;
+  uint8_t windowIndex = 0;
+  uint32_t sampleCount = 0;
+  float spread = 0.0F;
 };
 
 struct TagState {
@@ -119,6 +133,11 @@ struct TagState {
   const char* installation;
   uint16_t major;
   uint16_t minor;
+  const char* role;
+  const char* crew;
+  const char* shiftName;
+  const char* shiftStart;
+  const char* shiftEnd;
   int rssi = -127;
   int txPower = -59;
   float filteredRssi = -127.0F;
@@ -126,27 +145,46 @@ struct TagState {
   float previousDistance = 0.0F;
   uint32_t lastSeen = 0;
   String readerId;
+  String readerCandidateId;
+  uint32_t readerCandidateSince = 0;
+  uint32_t readerCandidateEvidence = 0;
+  uint8_t readerCandidateCount = 0;
   ReaderObservation observations[READER_COUNT];
   String status = "sin_senal";
+  String pendingStatus;
+  uint32_t pendingStatusSince = 0;
+  uint32_t pendingStatusEvidence = 0;
+  uint8_t pendingStatusCount = 0;
   String trend = "sin_datos";
   uint32_t dangerCount = 0;
+  uint32_t warningCount = 0;
   uint32_t nearCount = 0;
+  uint32_t safeCount = 0;
   uint32_t offlineCount = 0;
 
   TagState(const char* tagId, const char* tagName, const char* tagType,
            const char* tagCategory, const char* tagOwner,
-           const char* tagInstallation, uint16_t tagMajor, uint16_t tagMinor)
+           const char* tagInstallation, uint16_t tagMajor, uint16_t tagMinor,
+           const char* workerRole, const char* workerCrew,
+           const char* workerShiftName, const char* workerShiftStart,
+           const char* workerShiftEnd)
       : id(tagId), name(tagName), type(tagType), category(tagCategory),
         owner(tagOwner), installation(tagInstallation), major(tagMajor),
-        minor(tagMinor) {}
+        minor(tagMinor), role(workerRole), crew(workerCrew),
+        shiftName(workerShiftName), shiftStart(workerShiftStart),
+        shiftEnd(workerShiftEnd) {}
 };
 
 struct EventRecord {
   String id;
+  String type;
   String tagId;
   String name;
   String previous;
   String current;
+  String previousReaderId;
+  String readerId;
+  String sector;
   float distance = 0.0F;
   int rssi = -127;
   uint64_t timestamp = 0;
@@ -166,13 +204,35 @@ struct SupervisorMessage {
   uint64_t confirmedAt = 0;
 };
 
+struct GpsPoint {
+  double latitude = 0.0;
+  double longitude = 0.0;
+  float altitude = 0.0F;
+  uint64_t timestamp = 0;
+  int batteryLevel = -1;
+  float voltage = 0.0F;
+  uint8_t precisionBits = 0;
+  String source = "gnss";
+};
+
+struct GpsTrackerState {
+  String nodeId = GPS_NODE_ID;
+  uint32_t nodeNum = GPS_NODE_NUM;
+  String beaconId = GPS_BEACON_ID;
+  String assetType = "trabajador";
+  String displayName = "Trabajador 01 - Supervisor";
+  String hardware = "SenseCAP Tracker T1000-E";
+  GpsPoint points[MAX_GPS_POINTS];
+  size_t pointCount = 0;
+};
+
 TagState tags[] = {
-    {"TAG-001", "Vehículo minero 01", "TAG vehicular", "maquinaria", "Vehículo 01",
-     "Instalado en cabina o parabrisas", 0, 0},
-    {"TAG-002", "Vehículo minero 02", "TAG vehicular", "maquinaria", "Vehículo 02",
-     "Instalado en cabina o parabrisas", 1, 0},
-    {"TAG-003", "Vehículo minero 03", "TAG vehicular", "maquinaria", "Vehículo 03",
-     "Instalado en cabina o parabrisas", 2, 0},
+    {"TAG-001", "Trabajador 01 - Supervisor", "Beacon personal + geotracker", "persona", "EMP-001",
+     "Beacon en casco o credencial + SenseCAP T1000-E", 0, 0, "Supervisor de terreno", "Supervision", "Turno dia", "08:00", "20:00"},
+    {"TAG-002", "Trabajador minero 02", "Beacon personal", "persona", "EMP-002",
+     "Instalado en casco o credencial", 1, 0, "Mantenedor mecanico", "Cuadrilla A", "Turno dia", "08:00", "20:00"},
+    {"TAG-003", "Trabajador minero 03", "Beacon personal", "persona", "EMP-003",
+     "Instalado en casco o credencial", 2, 0, "Supervisor de terreno", "Supervision", "Turno dia", "08:00", "20:00"},
 };
 constexpr size_t TAG_COUNT = sizeof(tags) / sizeof(tags[0]);
 
@@ -180,6 +240,7 @@ EventRecord events[MAX_EVENTS];
 size_t eventCount = 0;
 SupervisorMessage messages[MAX_MESSAGES];
 size_t messageCount = 0;
+GpsTrackerState gpsTracker;
 
 WebServer server(80);
 DNSServer dnsServer;
@@ -275,30 +336,102 @@ String classifyDistance(float distance) {
   return "seguro";
 }
 
-void addEvent(TagState& tag, const String& previous, const String& current) {
+String classifyDistanceStable(float distance, const String& current) {
+  // Los limites de salida son mas amplios que los de entrada. Esta histeresis
+  // evita que pequenas variaciones de RSSI hagan oscilar el estado en el borde.
+  if (current == "peligro" && distance <= 2.6F) return "peligro";
+  if (current == "precaucion") {
+    if (distance <= 1.7F) return "peligro";
+    if (distance <= 6.0F) return "precaucion";
+  }
+  if (current == "proximo") {
+    if (distance <= 4.4F) return "precaucion";
+    if (distance <= 14.0F) return "proximo";
+  }
+  if (current == "seguro" && distance <= 10.5F) return "proximo";
+  return classifyDistance(distance);
+}
+
+int readerIndexFor(const String& readerId);
+const char* readerSectorFor(const String& readerId);
+void saveHistory();
+
+EventRecord& beginEvent(TagState& tag, const String& type) {
   for (size_t index = min(eventCount, MAX_EVENTS - 1); index > 0; --index) {
     events[index] = events[index - 1];
   }
   if (eventCount < MAX_EVENTS) ++eventCount;
   EventRecord& item = events[0];
-  item.id = String(millis()) + "-" + tag.id;
+  item = EventRecord{};
+  item.id = String(epochNow() != 0 ? epochNow() : millis()) + "-" + tag.id + "-" + type;
+  item.type = type;
   item.tagId = tag.id;
   item.name = tag.name;
-  item.previous = previous;
-  item.current = current;
   item.distance = tag.distance;
   item.rssi = static_cast<int>(roundf(tag.filteredRssi));
   item.timestamp = epochNow();
-  if (current == "peligro") ++tag.dangerCount;
-  if (current == "proximo") ++tag.nearCount;
-  if (current == "sin_senal") ++tag.offlineCount;
+  return item;
 }
 
-void transitionTag(TagState& tag, const String& next) {
+void addEvent(TagState& tag, const String& previous, const String& current) {
+  EventRecord& item = beginEvent(tag, "estado");
+  item.previous = previous;
+  item.current = current;
+  item.readerId = tag.readerId;
+  item.sector = readerSectorFor(tag.readerId);
+  if (current == "peligro") ++tag.dangerCount;
+  if (current == "precaucion") ++tag.warningCount;
+  if (current == "proximo") ++tag.nearCount;
+  if (current == "seguro") ++tag.safeCount;
+  if (current == "sin_senal") ++tag.offlineCount;
+  saveHistory();
+}
+
+void addReaderEvent(TagState& tag, const String& previousReader, const String& currentReader) {
+  EventRecord& item = beginEvent(tag, "sector");
+  item.previous = tag.status;
+  item.current = tag.status;
+  item.previousReaderId = previousReader;
+  item.readerId = currentReader;
+  item.sector = readerSectorFor(currentReader);
+  saveHistory();
+}
+
+void commitTagTransition(TagState& tag, const String& next) {
   if (tag.status == next) return;
   const String previous = tag.status;
   tag.status = next;
+  tag.pendingStatus = "";
+  tag.pendingStatusCount = 0;
   addEvent(tag, previous, next);
+}
+
+void confirmTagTransition(TagState& tag, const String& next, uint32_t evidenceAt) {
+  if (tag.status == next) {
+    tag.pendingStatus = "";
+    tag.pendingStatusCount = 0;
+    return;
+  }
+  if (next == "sin_senal") {
+    commitTagTransition(tag, next);
+    return;
+  }
+  const uint32_t now = millis();
+  if (tag.pendingStatus != next) {
+    tag.pendingStatus = next;
+    tag.pendingStatusSince = now;
+    tag.pendingStatusEvidence = evidenceAt;
+    tag.pendingStatusCount = 1;
+    return;
+  }
+  if (tag.pendingStatusEvidence != evidenceAt) {
+    tag.pendingStatusEvidence = evidenceAt;
+    if (tag.pendingStatusCount < 255) ++tag.pendingStatusCount;
+  }
+  if (tag.pendingStatusCount >= STATE_CONFIRM_OBSERVATIONS &&
+      now - tag.pendingStatusSince >= STATE_CONFIRM_MS) {
+    commitTagTransition(tag, next);
+  }
 }
 
 int readerIndexFor(const String& readerId) {
@@ -317,57 +450,124 @@ bool observationVisible(const ReaderObservation& observation, uint32_t now) {
   return observation.lastSeen != 0 && now - observation.lastSeen <= TAG_TIMEOUT_MS;
 }
 
+float medianRssi(const ReaderObservation& observation) {
+  int values[RSSI_WINDOW_SIZE];
+  for (uint8_t index = 0; index < observation.windowCount; ++index) {
+    values[index] = observation.rssiWindow[index];
+  }
+  for (uint8_t left = 0; left < observation.windowCount; ++left) {
+    for (uint8_t right = left + 1; right < observation.windowCount; ++right) {
+      if (values[right] < values[left]) {
+        const int temporary = values[left];
+        values[left] = values[right];
+        values[right] = temporary;
+      }
+    }
+  }
+  if (observation.windowCount == 0) return -127.0F;
+  const uint8_t middle = observation.windowCount / 2;
+  if (observation.windowCount % 2 != 0) return static_cast<float>(values[middle]);
+  return (static_cast<float>(values[middle - 1]) + values[middle]) / 2.0F;
+}
+
 void selectBestReader(TagState& tag) {
   const uint32_t now = millis();
-  ReaderObservation* selected = nullptr;
-  String selectedId;
-
-  int currentIndex = readerIndexFor(tag.readerId);
-  if (currentIndex >= 0 && observationVisible(tag.observations[currentIndex], now)) {
-    selected = &tag.observations[currentIndex];
-    selectedId = READERS[currentIndex].id;
-  }
+  ReaderObservation* strongest = nullptr;
+  String strongestId;
 
   for (size_t index = 0; index < READER_COUNT; ++index) {
     ReaderObservation& candidate = tag.observations[index];
     if (!observationVisible(candidate, now)) continue;
-    if (selected == nullptr || candidate.distance < selected->distance * READER_SWITCH_FACTOR) {
-      selected = &candidate;
-      selectedId = READERS[index].id;
+    if (strongest == nullptr || candidate.distance < strongest->distance) {
+      strongest = &candidate;
+      strongestId = READERS[index].id;
     }
   }
 
+  int currentIndex = readerIndexFor(tag.readerId);
+  ReaderObservation* current = nullptr;
+  if (currentIndex >= 0 && observationVisible(tag.observations[currentIndex], now)) {
+    current = &tag.observations[currentIndex];
+  }
+
+  ReaderObservation* selected = current != nullptr ? current : strongest;
+  String selectedId = current != nullptr ? tag.readerId : strongestId;
+  if (current != nullptr && strongest != nullptr && strongestId != tag.readerId &&
+      strongest->distance < current->distance * READER_SWITCH_FACTOR) {
+    if (tag.readerCandidateId != strongestId) {
+      tag.readerCandidateId = strongestId;
+      tag.readerCandidateSince = now;
+      tag.readerCandidateEvidence = strongest->lastSeen;
+      tag.readerCandidateCount = 1;
+    } else if (tag.readerCandidateEvidence != strongest->lastSeen) {
+      tag.readerCandidateEvidence = strongest->lastSeen;
+      if (tag.readerCandidateCount < 255) ++tag.readerCandidateCount;
+    }
+    if (tag.readerCandidateCount >= READER_SWITCH_OBSERVATIONS &&
+        now - tag.readerCandidateSince >= READER_SWITCH_CONFIRM_MS) {
+      selected = strongest;
+      selectedId = strongestId;
+      tag.readerCandidateId = "";
+      tag.readerCandidateCount = 0;
+    }
+  } else {
+    tag.readerCandidateId = "";
+    tag.readerCandidateCount = 0;
+  }
+
   if (selected == nullptr) {
-    transitionTag(tag, "sin_senal");
+    confirmTagTransition(tag, "sin_senal", now);
     tag.trend = "sin_datos";
-    tag.readerId = "";
     return;
   }
 
-  tag.previousDistance = tag.distance;
+  const String previousReader = tag.readerId;
+  const uint32_t previousEvidence = tag.lastSeen;
+  if (selected->lastSeen != previousEvidence) tag.previousDistance = tag.distance;
   tag.readerId = selectedId;
   tag.rssi = selected->rssi;
   tag.txPower = selected->txPower;
   tag.filteredRssi = selected->filteredRssi;
   tag.distance = selected->distance;
   tag.lastSeen = selected->lastSeen;
-  if (tag.previousDistance == 0.0F || fabsf(tag.distance - tag.previousDistance) < 0.4F) tag.trend = "estable";
-  else tag.trend = tag.distance < tag.previousDistance ? "acercandose" : "alejandose";
-  transitionTag(tag, classifyDistance(tag.distance));
+  if (selected->lastSeen != previousEvidence) {
+    if (tag.previousDistance == 0.0F || fabsf(tag.distance - tag.previousDistance) < 0.6F) tag.trend = "estable";
+    else tag.trend = tag.distance < tag.previousDistance ? "acercandose" : "alejandose";
+  }
+  if (previousReader != selectedId) addReaderEvent(tag, previousReader, selectedId);
+  confirmTagTransition(tag, classifyDistanceStable(tag.distance, tag.status), selected->lastSeen);
 }
 
 void updateExpiredTags() {
   for (TagState& tag : tags) selectBestReader(tag);
 }
 
-void ingestTag(TagState& tag, int rssi, int advertisedTxPower, const String& readerId) {
+void ingestTag(TagState& tag, int rssi, int advertisedTxPower, const String& readerId,
+               uint32_t ageMs = 0) {
   ReaderObservation& observation = observationFor(tag, readerId);
-  observation.rssi = rssi;
+  observation.rssi = constrain(rssi, -120, -20);
   if (advertisedTxPower > -100 && advertisedTxPower < -20) observation.txPower = advertisedTxPower;
-  if (observation.filteredRssi < -120.0F) observation.filteredRssi = static_cast<float>(rssi);
-  else observation.filteredRssi = 0.35F * static_cast<float>(rssi) + 0.65F * observation.filteredRssi;
+  observation.rssiWindow[observation.windowIndex] = static_cast<int8_t>(observation.rssi);
+  observation.windowIndex = (observation.windowIndex + 1) % RSSI_WINDOW_SIZE;
+  if (observation.windowCount < RSSI_WINDOW_SIZE) ++observation.windowCount;
+  ++observation.sampleCount;
+  int minimum = 0;
+  int maximum = -127;
+  for (uint8_t index = 0; index < observation.windowCount; ++index) {
+    minimum = min(minimum, static_cast<int>(observation.rssiWindow[index]));
+    maximum = max(maximum, static_cast<int>(observation.rssiWindow[index]));
+  }
+  observation.spread = static_cast<float>(maximum - minimum);
+  const float median = medianRssi(observation);
+  if (observation.filteredRssi < -120.0F) observation.filteredRssi = median;
+  else {
+    // Limita saltos aislados antes del suavizado exponencial.
+    const float boundedDelta = constrain(median - observation.filteredRssi, -12.0F, 12.0F);
+    observation.filteredRssi += 0.28F * boundedDelta;
+  }
   observation.distance = estimateDistance(observation.filteredRssi, observation.txPower);
-  observation.lastSeen = millis();
+  const uint32_t now = millis();
+  observation.lastSeen = ageMs < now ? now - ageMs : 1;
   selectBestReader(tag);
 }
 
@@ -469,6 +669,250 @@ void loadMessages() {
   }
 }
 
+void appendEventJson(JsonArray array, const EventRecord& event) {
+  JsonObject item = array.add<JsonObject>();
+  item["id"] = event.id;
+  item["tipo"] = event.type;
+  item["beacon_id"] = event.tagId;
+  item["nombre"] = event.name;
+  item["anterior"] = event.previous;
+  item["estado"] = event.current;
+  item["reader_anterior"] = event.previousReaderId;
+  item["reader_id"] = event.readerId;
+  item["sector"] = event.sector;
+  item["distancia"] = serialized(String(event.distance, 1));
+  item["rssi"] = event.rssi;
+  addTimestamp(item, "fecha", event.timestamp);
+}
+
+void saveHistory() {
+  File file = LittleFS.open("/historial.json", "w");
+  if (!file) return;
+  JsonDocument document;
+  document["version"] = 1;
+  JsonArray array = document["eventos"].to<JsonArray>();
+  for (size_t index = 0; index < eventCount; ++index) appendEventJson(array, events[index]);
+  JsonArray counters = document["contadores"].to<JsonArray>();
+  for (const TagState& tag : tags) {
+    JsonObject item = counters.add<JsonObject>();
+    item["id"] = tag.id;
+    item["peligro"] = tag.dangerCount;
+    item["precaucion"] = tag.warningCount;
+    item["proximo"] = tag.nearCount;
+    item["seguro"] = tag.safeCount;
+    item["sin_senal"] = tag.offlineCount;
+  }
+  serializeJson(document, file);
+  file.close();
+}
+
+void loadHistory() {
+  if (!LittleFS.exists("/historial.json")) return;
+  File file = LittleFS.open("/historial.json", "r");
+  JsonDocument document;
+  if (deserializeJson(document, file)) {
+    file.close();
+    return;
+  }
+  file.close();
+  eventCount = 0;
+  for (JsonObject source : document["eventos"].as<JsonArray>()) {
+    if (eventCount >= MAX_EVENTS) break;
+    EventRecord& event = events[eventCount++];
+    event.id = source["id"] | "";
+    event.type = source["tipo"] | "estado";
+    event.tagId = source["beacon_id"] | "";
+    event.name = source["nombre"] | "";
+    event.previous = source["anterior"] | "";
+    event.current = source["estado"] | "";
+    event.previousReaderId = source["reader_anterior"] | "";
+    event.readerId = source["reader_id"] | "";
+    event.sector = source["sector"] | "";
+    event.distance = source["distancia"] | 0.0F;
+    event.rssi = source["rssi"] | -127;
+    event.timestamp = source["fecha"] | 0ULL;
+  }
+  for (JsonObject source : document["contadores"].as<JsonArray>()) {
+    const String id = source["id"] | "";
+    for (TagState& tag : tags) {
+      if (id != tag.id) continue;
+      tag.dangerCount = source["peligro"] | 0U;
+      tag.warningCount = source["precaucion"] | 0U;
+      tag.nearCount = source["proximo"] | 0U;
+      tag.safeCount = source["seguro"] | 0U;
+      tag.offlineCount = source["sin_senal"] | 0U;
+      break;
+    }
+  }
+}
+
+bool gpsAccessAuthorized() {
+  return adminAuthenticated || !supervisorName.isEmpty();
+}
+
+bool readGpsPoint(JsonObject source, GpsPoint& point) {
+  point.latitude = source["latitude"] | 0.0;
+  point.longitude = source["longitude"] | 0.0;
+  point.altitude = source["altitude"] | 0.0F;
+  point.timestamp = source["timestamp"] | 0ULL;
+  point.batteryLevel = source["battery_level"] | -1;
+  point.voltage = source["voltage"] | 0.0F;
+  point.precisionBits = source["precision_bits"] | 0;
+  point.source = source["source"] | "gnss";
+  return std::isfinite(point.latitude) && std::isfinite(point.longitude) &&
+         point.latitude >= -90.0 && point.latitude <= 90.0 &&
+         point.longitude >= -180.0 && point.longitude <= 180.0 &&
+         point.timestamp != 0;
+}
+
+void appendGpsPointJson(JsonObject item, const GpsPoint& point) {
+  item["latitude"] = serialized(String(point.latitude, 7));
+  item["longitude"] = serialized(String(point.longitude, 7));
+  item["altitude"] = serialized(String(point.altitude, 1));
+  addTimestamp(item, "timestamp", point.timestamp);
+  if (point.batteryLevel < 0) item["battery_level"] = nullptr;
+  else item["battery_level"] = point.batteryLevel;
+  if (point.voltage <= 0.0F) item["voltage"] = nullptr;
+  else item["voltage"] = serialized(String(point.voltage, 2));
+  item["precision_bits"] = point.precisionBits;
+  item["source"] = point.source;
+}
+
+void saveGpsTracker() {
+  File file = LittleFS.open("/gps_tracker.json", "w");
+  if (!file) return;
+  JsonDocument document;
+  document["version"] = 1;
+  document["node_id"] = gpsTracker.nodeId;
+  document["node_num"] = gpsTracker.nodeNum;
+  document["beacon_id"] = gpsTracker.beaconId;
+  document["asset_type"] = gpsTracker.assetType;
+  document["display_name"] = gpsTracker.displayName;
+  document["hardware"] = gpsTracker.hardware;
+  if (gpsTracker.pointCount > 0) {
+    JsonObject position = document["position"].to<JsonObject>();
+    appendGpsPointJson(position, gpsTracker.points[0]);
+  }
+  JsonArray history = document["history"].to<JsonArray>();
+  for (size_t index = 0; index < gpsTracker.pointCount; ++index) {
+    appendGpsPointJson(history.add<JsonObject>(), gpsTracker.points[index]);
+  }
+  serializeJson(document, file);
+  file.close();
+}
+
+void loadGpsTracker() {
+  if (!LittleFS.exists("/gps_tracker.json")) return;
+  File file = LittleFS.open("/gps_tracker.json", "r");
+  JsonDocument document;
+  if (deserializeJson(document, file)) {
+    file.close();
+    return;
+  }
+  file.close();
+  gpsTracker.nodeId = document["node_id"] | GPS_NODE_ID;
+  gpsTracker.nodeNum = document["node_num"] | GPS_NODE_NUM;
+  gpsTracker.beaconId = document["beacon_id"] | GPS_BEACON_ID;
+  gpsTracker.assetType = document["asset_type"] | "trabajador";
+  gpsTracker.displayName = document["display_name"] | "Trabajador 01 - Supervisor";
+  gpsTracker.hardware = document["hardware"] | "SenseCAP Tracker T1000-E";
+  gpsTracker.pointCount = 0;
+  for (JsonObject source : document["history"].as<JsonArray>()) {
+    if (gpsTracker.pointCount >= MAX_GPS_POINTS) break;
+    GpsPoint point;
+    if (readGpsPoint(source, point)) gpsTracker.points[gpsTracker.pointCount++] = point;
+  }
+  if (gpsTracker.pointCount == 0 && document["position"].is<JsonObject>()) {
+    GpsPoint point;
+    if (readGpsPoint(document["position"].as<JsonObject>(), point)) {
+      gpsTracker.points[gpsTracker.pointCount++] = point;
+    }
+  }
+}
+
+void prependGpsPoint(const GpsPoint& point) {
+  if (gpsTracker.pointCount > 0 && gpsTracker.points[0].timestamp == point.timestamp) {
+    gpsTracker.points[0] = point;
+    return;
+  }
+  const size_t last = min(gpsTracker.pointCount, MAX_GPS_POINTS - 1);
+  for (size_t index = last; index > 0; --index) gpsTracker.points[index] = gpsTracker.points[index - 1];
+  gpsTracker.points[0] = point;
+  if (gpsTracker.pointCount < MAX_GPS_POINTS) ++gpsTracker.pointCount;
+}
+
+void sendGpsTracker() {
+  JsonDocument document;
+  document["autorizado"] = gpsAccessAuthorized();
+  document["node_id"] = gpsTracker.nodeId;
+  document["node_num"] = gpsTracker.nodeNum;
+  document["beacon_id"] = gpsTracker.beaconId;
+  document["asset_type"] = gpsTracker.assetType;
+  document["display_name"] = gpsTracker.displayName;
+  document["hardware"] = gpsTracker.hardware;
+  document["tiene_posicion"] = gpsTracker.pointCount > 0;
+  document["requiere_rol"] = "supervisor_o_administrador";
+  if (!gpsAccessAuthorized()) {
+    sendJson(403, document);
+    return;
+  }
+  if (gpsTracker.pointCount > 0) {
+    JsonObject position = document["position"].to<JsonObject>();
+    appendGpsPointJson(position, gpsTracker.points[0]);
+    const uint64_t now = epochNow();
+    if (now == 0 || gpsTracker.points[0].timestamp > now) document["edad_ms"] = nullptr;
+    else document["edad_ms"] = now - gpsTracker.points[0].timestamp;
+  }
+  JsonArray history = document["history"].to<JsonArray>();
+  for (size_t index = 0; index < gpsTracker.pointCount; ++index) {
+    appendGpsPointJson(history.add<JsonObject>(), gpsTracker.points[index]);
+  }
+  sendJson(200, document);
+}
+
+void receiveGpsTrackerUpdate() {
+  JsonDocument body;
+  if (!parseJsonBody(body)) return;
+  const String token = body["token"] | "";
+  if (token != READER_TOKEN && !gpsAccessAuthorized()) {
+    server.send(403, "text/plain; charset=utf-8", "Token o sesion autorizada requerida");
+    return;
+  }
+  const String nodeId = body["node_id"] | GPS_NODE_ID;
+  const uint32_t nodeNum = body["node_num"] | GPS_NODE_NUM;
+  if (nodeId != GPS_NODE_ID || nodeNum != GPS_NODE_NUM) {
+    server.send(409, "text/plain; charset=utf-8", "El punto GPS no pertenece al T1000-E asociado a TAG-001");
+    return;
+  }
+  JsonObject source = body["position"].is<JsonObject>()
+                          ? body["position"].as<JsonObject>()
+                          : body.as<JsonObject>();
+  GpsPoint point;
+  point.latitude = source["latitude"] | 0.0;
+  point.longitude = source["longitude"] | 0.0;
+  point.altitude = source["altitude"] | 0.0F;
+  point.timestamp = source["timestamp"] | 0ULL;
+  if (point.timestamp > 0 && point.timestamp < 100000000000ULL) point.timestamp *= 1000ULL;
+  point.batteryLevel = source["battery_level"] | -1;
+  point.voltage = source["voltage"] | 0.0F;
+  point.precisionBits = source["precision_bits"] | 0;
+  point.source = source["source"] | "meshtastic_gnss";
+  if (!std::isfinite(point.latitude) || !std::isfinite(point.longitude) ||
+      point.latitude < -90.0 || point.latitude > 90.0 ||
+      point.longitude < -180.0 || point.longitude > 180.0 || point.timestamp == 0) {
+    server.send(400, "text/plain; charset=utf-8", "Coordenada o fecha GPS invalida");
+    return;
+  }
+  prependGpsPoint(point);
+  saveGpsTracker();
+  JsonDocument response;
+  response["actualizado"] = true;
+  response["node_id"] = gpsTracker.nodeId;
+  response["beacon_id"] = gpsTracker.beaconId;
+  response["timestamp"] = point.timestamp;
+  sendJson(200, response);
+}
+
 const char* readerNameFor(const String& readerId) {
   const int index = readerIndexFor(readerId);
   return index < 0 ? LOCAL_READER.name : READERS[index].name;
@@ -483,6 +927,27 @@ void appendReaderCoordinates(JsonArray coordinates, const String& readerId) {
   const int index = readerIndexFor(readerId);
   const ReaderConfig& reader = index < 0 ? LOCAL_READER : READERS[index];
   coordinates.add(reader.x); coordinates.add(reader.y); coordinates.add(reader.z);
+}
+
+const char* shiftStatusFor(const TagState& tag) {
+  if (tag.status == "sin_senal") {
+    if (tag.readerId == "RX-03") return "fuera";
+    if (tag.readerId.isEmpty()) return "ausente";
+    return "sin_senal";
+  }
+  if (tag.readerId == "RX-02") return "ingresando";
+  if (tag.readerId == "RX-01") return "en_turno";
+  if (tag.readerId == "RX-03") return "saliendo";
+  return "sin_senal";
+}
+
+uint64_t latestReaderEventFor(const String& tagId, const char* readerId) {
+  for (size_t index = 0; index < eventCount; ++index) {
+    const EventRecord& event = events[index];
+    if (event.type == "sector" && event.tagId == tagId &&
+        event.readerId == readerId && event.timestamp != 0) return event.timestamp;
+  }
+  return 0;
 }
 
 void sendState() {
@@ -535,6 +1000,24 @@ void sendState() {
     item["persona"] = tag.owner;
     item["categoria"] = tag.category;
     item["instalacion"] = tag.installation;
+    item["codigo_personal"] = tag.owner;
+    item["cargo"] = tag.role;
+    item["cuadrilla"] = tag.crew;
+    const bool gpsAssociated = strcmp(tag.id, GPS_BEACON_ID) == 0;
+    item["gps_asociado"] = gpsAssociated;
+    if (gpsAssociated) {
+      item["gps_node_id"] = GPS_NODE_ID;
+      item["gps_disponible"] = gpsTracker.pointCount > 0;
+      item["gps_hardware"] = gpsTracker.hardware;
+    }
+    item["estado_turno"] = shiftStatusFor(tag);
+    JsonObject shift = item["turno"].to<JsonObject>();
+    shift["nombre"] = tag.shiftName;
+    shift["inicio"] = tag.shiftStart;
+    shift["fin"] = tag.shiftEnd;
+    addTimestamp(shift, "ultimo_ingreso", latestReaderEventFor(tag.id, "RX-02"));
+    addTimestamp(shift, "ultima_presencia_interior", latestReaderEventFor(tag.id, "RX-01"));
+    addTimestamp(shift, "ultima_salida", latestReaderEventFor(tag.id, "RX-03"));
     item["uuid"] = TARGET_UUID;
     item["major"] = tag.major;
     item["minor"] = tag.minor;
@@ -562,24 +1045,89 @@ void sendState() {
     item["transporte"] = "Bluetooth local";
     JsonObject counters = item["contadores"].to<JsonObject>();
     counters["peligro"] = tag.dangerCount;
+    counters["precaucion"] = tag.warningCount;
     counters["proximo"] = tag.nearCount;
+    counters["seguro"] = tag.safeCount;
     counters["sin_senal"] = tag.offlineCount;
+    JsonObject precision = item["precision"].to<JsonObject>();
+    const int selectedIndex = readerIndexFor(tag.readerId);
+    if (visible && selectedIndex >= 0) {
+      const ReaderObservation& observation = tag.observations[selectedIndex];
+      precision["rssi_crudo"] = observation.rssi;
+      precision["rssi_filtrado"] = serialized(String(observation.filteredRssi, 1));
+      precision["muestras"] = observation.sampleCount;
+      precision["ventana"] = observation.windowCount;
+      precision["dispersion_db"] = serialized(String(observation.spread, 1));
+      precision["calidad"] = observation.windowCount < 3 ? "inicializando" :
+          observation.spread <= 6.0F ? "alta" : observation.spread <= 12.0F ? "media" : "variable";
+    } else {
+      precision["rssi_crudo"] = nullptr;
+      precision["rssi_filtrado"] = nullptr;
+      precision["muestras"] = 0;
+      precision["ventana"] = 0;
+      precision["dispersion_db"] = nullptr;
+      precision["calidad"] = "sin_senal";
+    }
+    if (tag.pendingStatus.isEmpty()) precision["estado_pendiente"] = nullptr;
+    else precision["estado_pendiente"] = tag.pendingStatus;
+    if (tag.readerCandidateId.isEmpty()) precision["reader_candidato"] = nullptr;
+    else precision["reader_candidato"] = tag.readerCandidateId;
   }
 
   JsonArray eventArray = document["eventos"].to<JsonArray>();
+  const size_t recentEventCount = min(eventCount, static_cast<size_t>(30));
+  for (size_t index = 0; index < recentEventCount; ++index) appendEventJson(eventArray, events[index]);
+  sendJson(200, document);
+}
+
+void sendReports() {
+  updateExpiredTags();
+  JsonDocument document;
+  JsonObject summary = document["resumen"].to<JsonObject>();
+  size_t stateChanges = 0;
+  size_t sectorChanges = 0;
   for (size_t index = 0; index < eventCount; ++index) {
-    const EventRecord& event = events[index];
-    JsonObject item = eventArray.add<JsonObject>();
-    item["id"] = event.id;
-    item["beacon_id"] = event.tagId;
-    item["nombre"] = event.name;
-    item["persona"] = "";
-    item["anterior"] = event.previous;
-    item["estado"] = event.current;
-    item["distancia"] = serialized(String(event.distance, 1));
-    item["rssi"] = event.rssi;
-    addTimestamp(item, "fecha", event.timestamp);
+    if (events[index].type == "sector") ++sectorChanges;
+    else ++stateChanges;
   }
+  size_t active = 0, onShift = 0, entering = 0, leaving = 0, absent = 0;
+  for (const TagState& tag : tags) {
+    const String shiftStatus = shiftStatusFor(tag);
+    if (tag.status != "sin_senal" && !tag.readerId.isEmpty()) ++active;
+    if (shiftStatus == "en_turno") ++onShift;
+    else if (shiftStatus == "ingresando") ++entering;
+    else if (shiftStatus == "saliendo") ++leaving;
+    else ++absent;
+  }
+  summary["eventos"] = eventCount;
+  summary["cambios_estado"] = stateChanges;
+  summary["cambios_sector"] = sectorChanges;
+  summary["personas_esperadas"] = TAG_COUNT;
+  summary["personas_detectadas"] = active;
+  summary["en_turno"] = onShift;
+  summary["ingresando"] = entering;
+  summary["saliendo"] = leaving;
+  summary["ausentes_o_sin_senal"] = absent;
+  summary["capacidad_historial"] = MAX_EVENTS;
+  addTimestamp(summary, "generado", epochNow());
+
+  JsonArray perTag = document["por_tag"].to<JsonArray>();
+  for (const TagState& tag : tags) {
+    JsonObject item = perTag.add<JsonObject>();
+    item["id"] = tag.id;
+    item["nombre"] = tag.name;
+    item["codigo_personal"] = tag.owner;
+    item["cargo"] = tag.role;
+    item["cuadrilla"] = tag.crew;
+    item["estado_turno"] = shiftStatusFor(tag);
+    item["peligro"] = tag.dangerCount;
+    item["precaucion"] = tag.warningCount;
+    item["proximo"] = tag.nearCount;
+    item["seguro"] = tag.safeCount;
+    item["sin_senal"] = tag.offlineCount;
+  }
+  JsonArray history = document["historial"].to<JsonArray>();
+  for (size_t index = 0; index < eventCount; ++index) appendEventJson(history, events[index]);
   sendJson(200, document);
 }
 
@@ -752,10 +1300,11 @@ void handleDynamicApi() {
     const String id = uri.substring(String("/api/historial-proximidad/").length());
     for (TagState& tag : tags) {
       if (id == tag.id) {
-        tag.dangerCount = tag.nearCount = tag.offlineCount = 0;
+        tag.dangerCount = tag.warningCount = tag.nearCount = tag.safeCount = tag.offlineCount = 0;
         size_t write = 0;
         for (size_t read = 0; read < eventCount; ++read) if (events[read].tagId != id) events[write++] = events[read];
         eventCount = write;
+        saveHistory();
         JsonDocument response; response["beacon_id"] = id; sendJson(200, response); return;
       }
     }
@@ -777,6 +1326,20 @@ void serveIndex() {
     return;
   }
   server.streamFile(file, "text/html; charset=utf-8");
+  file.close();
+}
+
+void serveMutableBackup(const char* path) {
+  if (!adminAuthenticated) {
+    server.send(403, "text/plain; charset=utf-8", "Se requiere una sesion de administrador");
+    return;
+  }
+  File file = LittleFS.open(path, "r");
+  if (!file) {
+    server.send(404, "text/plain; charset=utf-8", "Registro no disponible");
+    return;
+  }
+  server.streamFile(file, "application/json; charset=utf-8");
   file.close();
 }
 
@@ -968,6 +1531,12 @@ void configureWeb() {
     server.send(200, "text/plain; charset=utf-8", text);
   });
   server.on("/api/estado", HTTP_GET, sendState);
+  server.on("/api/reportes", HTTP_GET, sendReports);
+  server.on("/api/gps", HTTP_GET, sendGpsTracker);
+  server.on("/api/gps/actualizar", HTTP_POST, receiveGpsTrackerUpdate);
+  server.on("/api/respaldo/historial", HTTP_GET, []() { serveMutableBackup("/historial.json"); });
+  server.on("/api/respaldo/gps", HTTP_GET, []() { serveMutableBackup("/gps_tracker.json"); });
+  server.on("/api/respaldo/mensajes", HTTP_GET, []() { serveMutableBackup("/mensajes.json"); });
   server.on("/api/coordinacion", HTTP_GET, []() {
     JsonDocument response;
     response["coordinador_preferido"] = "RX-01";
@@ -989,6 +1558,16 @@ void configureWeb() {
     if (!parseJsonBody(body)) return;
     clockEpochBase = body["epoch"] | 0ULL;
     clockMillisBase = millis();
+    if (clockEpochBase != 0) {
+      const uint64_t synchronizedAt = epochNow();
+      bool historyUpdated = false;
+      for (size_t index = 0; index < eventCount; ++index) {
+        if (events[index].timestamp != 0) continue;
+        events[index].timestamp = synchronizedAt;
+        historyUpdated = true;
+      }
+      if (historyUpdated) saveHistory();
+    }
     JsonDocument response; response["sincronizado"] = clockEpochBase != 0; sendJson(200, response);
   });
   server.on("/api/mensajes", HTTP_GET, sendMessages);
@@ -1001,7 +1580,10 @@ void configureWeb() {
   server.on("/api/historial-proximidad", HTTP_DELETE, []() {
     if (!adminAuthenticated) { server.send(403, "text/plain; charset=utf-8", "Se requiere una sesión de administrador"); return; }
     const size_t removed = eventCount; eventCount = 0;
-    for (TagState& tag : tags) tag.dangerCount = tag.nearCount = tag.offlineCount = 0;
+    for (TagState& tag : tags) {
+      tag.dangerCount = tag.warningCount = tag.nearCount = tag.safeCount = tag.offlineCount = 0;
+    }
+    saveHistory();
     JsonDocument response; response["eliminados"] = removed; sendJson(200, response);
   });
   server.on("/api/supervisor/estado", HTTP_GET, []() {
@@ -1378,9 +1960,9 @@ void startLoRa() {
 }
 
 const char* oledSectorLabel() {
-  if (LOCAL_READER_INDEX == 0) return "Estacionamiento";
-  if (LOCAL_READER_INDEX == 1) return "Camino ingreso";
-  return "Camino salida";
+  if (LOCAL_READER_INDEX == 0) return "Punto formacion";
+  if (LOCAL_READER_INDEX == 1) return "Control acceso";
+  return "Salida personal";
 }
 
 void renderOledStatus() {
@@ -1483,11 +2065,8 @@ void receiveLoRaObservations() {
     const LoRaReading& reading = frame.readings[index];
     for (TagState& tag : tags) {
       if (tag.major != reading.major || tag.minor != reading.minor) continue;
-      ingestTag(tag, reading.rssi, reading.txPower, READERS[remoteIndex].id);
-      ReaderObservation& observation = tag.observations[remoteIndex];
       const uint32_t age = static_cast<uint32_t>(reading.age100ms) * 100;
-      observation.lastSeen = age < millis() ? millis() - age : 1;
-      selectBestReader(tag);
+      ingestTag(tag, reading.rssi, reading.txPower, READERS[remoteIndex].id, age);
       break;
     }
   }
@@ -1523,6 +2102,8 @@ void setup() {
   else {
     Serial.printf("[FS] %u bytes usados de %u\n", LittleFS.usedBytes(), LittleFS.totalBytes());
     loadMessages();
+    loadHistory();
+    loadGpsTracker();
   }
   // La red debe quedar inicializada antes de compartir la radio con BLE.
   startNetwork();

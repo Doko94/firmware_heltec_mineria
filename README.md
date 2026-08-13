@@ -93,3 +93,53 @@ La primera compilacion requiere que PlatformIO instale o encuentre sus
 dependencias. Si queda detenido por procesos antiguos, cerrar todas las ventanas
 de VS Code, esperar unos segundos y abrir solamente esta carpeta antes de volver
 a compilar.
+
+## Trabajador 01: beacon BLE + SenseCAP T1000-E
+
+`TAG-001` esta asociado al nodo Meshtastic `!f72ad896`. El DXF muestra el ultimo
+sector detectado por BLE y la tarjeta GPS inferior mantiene acceso a la ultima
+posicion GNSS aunque el beacon quede fuera de cobertura. Las coordenadas exactas
+requieren sesion de supervisor o administrador.
+
+En laboratorio, el notebook puede actuar como puente mientras el T1000-E esta
+conectado por USB y el notebook esta unido a `MINA-LOCAL`:
+
+```powershell
+python -m pip install -r tools/requirements-gps.txt
+python tools/meshtastic_gps_bridge.py --port COM4
+```
+
+El puente solo lee el tracker y publica los puntos en la API local del reader que
+este sirviendo `192.168.4.1`. Para terreno sin notebook se necesita un cuarto
+equipo LoRa compatible con Meshtastic que actue como gateway; RX01, RX02 y RX03
+deben conservarse como readers del protocolo local de proximidad.
+
+### Prueba autonoma usando RX-02 como gateway temporal
+
+El perfil `heltec_rx02_gateway` permite validar el flujo sin notebook antes de
+comprar una cuarta placa. Recibe exclusivamente los paquetes Meshtastic del
+T1000-E en el canal configurado y publica la posicion en RX-01 mediante la red
+local:
+
+```powershell
+pio run -e heltec_rx02_gateway -t upload --upload-port COMx
+pio device monitor -e heltec_rx02_gateway --port COMx
+```
+
+El OLED debe mostrar `RX-02 GW`, `LoRa: 919.625 OK` y luego
+`WiFi: MINA-LOCAL`. RX-01 debe permanecer encendido porque conserva el portal,
+el mapa y el historial. El notebook se puede desconectar despues del flasheo.
+
+Durante esta prueba RX-02 deja de escanear beacons BLE y no participa en la
+malla LoRa propia de RX-01/RX-03: su unica radio queda dedicada a Meshtastic.
+Para devolverlo a lector normal basta flashear otra vez:
+
+```powershell
+pio run -e heltec_rx02 -t upload --upload-port COMx
+```
+
+El T1000-E transmite actualmente una posicion cada 15 minutos y el canal limita
+la precision a 13 bits. Es suficiente para comprobar el transporte autonomo,
+pero no para validar una calle exacta; reducir el intervalo aumenta el consumo
+de bateria y ampliar la precision expone la coordenada exacta a los integrantes
+del canal Meshtastic.

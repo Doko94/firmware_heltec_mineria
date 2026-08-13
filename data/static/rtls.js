@@ -92,18 +92,89 @@ function tagNumber(tag) {
   return match ? match[1].padStart(2, "0") : "--";
 }
 
-function parkingPlacement(tag, index, project) {
-  const zone = mineLayout?.zonas_operativas?.[tag.reader_id];
-  if (!zone?.puntos?.length) return null;
-  const point = zone.puntos[index % zone.puntos.length];
-  const projected = project(point);
-  const plaza = tag.reader_id === "RX-01" ? mineLayout.plazas?.[index] : null;
-  return {
-    x: projected[0],
-    y: projected[1],
-    estado: plaza ? `${zone.estado} · Plaza ${plaza.id}` : zone.estado,
-    clase: tag.reader_id === "RX-01" ? "estacionado" : tag.reader_id === "RX-02" ? "ingresando" : "saliendo"
-  };
+function clampMapValue(value, minimum, maximum) {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+/*
+ * Ordena todos los TAG de un reader en una grilla estable. Antes se usaban
+ * solo tres puntos de zona y, desde el cuarto TAG, las posiciones se repetian.
+ * La grilla crece por filas, centra la ultima fila y reduce levemente los
+ * marcadores cuando el grupo es grande para conservar legibilidad.
+ */
+function groupedTagPlacements(tags, project) {
+  const grouped = new Map();
+  tags.forEach(tag => {
+    const readerId = tag.reader_id || "SIN-RX";
+    if (!grouped.has(readerId)) grouped.set(readerId, []);
+    grouped.get(readerId).push(tag);
+  });
+
+  const positions = new Map();
+  const clusters = [];
+  for (const [readerId, readerTags] of grouped.entries()) {
+    const zone = mineLayout?.zonas_operativas?.[readerId];
+    const zonePoints = (zone?.puntos || []).map(point => project(point));
+    const fallbackPoints = readerTags.map(tag => project(tag.coordenadas));
+    const anchorPoints = zonePoints.length ? zonePoints : fallbackPoints;
+    const anchor = anchorPoints.reduce((total, point) => [total[0] + point[0], total[1] + point[1]], [0, 0]);
+    anchor[0] /= Math.max(1, anchorPoints.length);
+    anchor[1] /= Math.max(1, anchorPoints.length);
+
+    const count = readerTags.length;
+    const dense = count > 24;
+    const veryDense = count > 80;
+    const spacingX = veryDense ? 34 : dense ? 46 : 72;
+    const spacingY = veryDense ? 34 : dense ? 48 : 62;
+    const preferredColumns = count <= 3 ? count : count <= 8 ? 4 :
+        Math.min(veryDense ? 14 : 10, Math.ceil(Math.sqrt(count * 1.35)));
+    const columns = Math.max(1, Math.min(count, preferredColumns));
+    const rows = Math.ceil(count / columns);
+    const contentWidth = Math.max(0, (columns - 1) * spacingX);
+    const contentHeight = Math.max(0, (rows - 1) * spacingY);
+    // El margen horizontal reserva espacio para la ficha que se abre al tocar.
+    const centerX = clampMapValue(anchor[0], 105 + contentWidth / 2, 895 - contentWidth / 2);
+    const centerY = clampMapValue(anchor[1], 70 + contentHeight / 2, 500 - contentHeight / 2);
+
+    readerTags.forEach((tag, index) => {
+      const row = Math.floor(index / columns);
+      const rowStart = row * columns;
+      const rowCount = Math.min(columns, count - rowStart);
+      const column = index - rowStart;
+      const x = centerX + (column - (rowCount - 1) / 2) * spacingX;
+      const y = centerY + (row - (rows - 1) / 2) * spacingY;
+      positions.set(tag.id, {
+        x,
+        y,
+        estado: zone?.estado || tag.estado_turno || "Ubicacion estimada",
+        clase: zone?.clase || (readerId === "RX-01" ? "en-turno" : readerId === "RX-02" ? "ingresando" : "saliendo"),
+        markerRadius: veryDense ? 11 : dense ? 14 : 17,
+        placeBelow: y < 310
+      });
+    });
+
+    clusters.push({
+      readerId,
+      count,
+      x: centerX - contentWidth / 2 - 27,
+      y: centerY - contentHeight / 2 - 31,
+      width: contentWidth + 54,
+      height: contentHeight + 61
+    });
+  }
+  return {positions, clusters};
+}
+
+function drawTagCluster(svg, cluster) {
+  const group = svgElement("g", {class: "tag-cluster", "aria-hidden": "true"});
+  group.appendChild(svgElement("rect", {x: cluster.x, y: cluster.y, width: cluster.width, height: cluster.height, rx: 15, class: "tag-cluster-area"}));
+  group.appendChild(svgElement("rect", {x: cluster.x + 9, y: cluster.y - 9, width: 112, height: 23, rx: 8, class: "tag-cluster-badge"}));
+  const count = svgElement("text", {x: cluster.x + 17, y: cluster.y + 7, class: "tag-cluster-title"});
+  count.textContent = `${cluster.readerId} · ${cluster.count} TAG`;
+  group.appendChild(count);
+  const firstReader = svg.querySelector(".reader-node");
+  if (firstReader) svg.insertBefore(group, firstReader);
+  else svg.appendChild(group);
 }
 
 function drawTagLabel(group, x, y, tag, placeBelow, pendingMessage = null, operationalState = "") {
@@ -143,6 +214,7 @@ function selectMapTag(svg, group, tagId) {
   svg.classList.add("has-tag-selection");
   svg.appendChild(group);
   group.focus({preventScroll: true});
+  window.dispatchEvent(new CustomEvent("mina:tag-selected", {detail: {tagId}}));
 }
 
 function clearMapTagSelection() {
@@ -150,6 +222,7 @@ function clearMapTagSelection() {
   const svg = $("mineSvg");
   svg.classList.remove("has-tag-selection");
   svg.querySelectorAll(".tag-node.selected").forEach(node => node.classList.remove("selected"));
+  window.dispatchEvent(new CustomEvent("mina:tag-selected", {detail: {tagId: null}}));
 }
 
 function renderMine() {
@@ -169,9 +242,9 @@ function renderMine() {
     tunnels.appendChild(svgElement("line", {x1: a[0], y1: a[1], x2: b[0], y2: b[1], class: `tunnel-core layer-${layer}`}));
   }
   svg.appendChild(tunnels);
-  for (const plaza of mineLayout.plazas || []) {
-    const point = project([plaza.x, plaza.y, plaza.z || 0]);
-    drawText(svg, point[0], point[1] + 4, plaza.id, "parking-slot-label");
+  for (const label of mineLayout.etiquetas || []) {
+    const point = project([label.x, label.y, label.z || 0]);
+    drawText(svg, point[0], point[1] + 4, label.id, "office-area-label");
   }
   for (const reader of mineLayout.readers || []) {
     const point = project([reader.x, reader.y, reader.z]);
@@ -184,36 +257,36 @@ function renderMine() {
   const tags = state.beacons
     .filter(item => Array.isArray(item.coordenadas) && item.estado !== "sin_senal")
     .sort((a, b) => String(a.id).localeCompare(String(b.id)));
-  const offsets = new Map();
-  const positions = [[46, -42], [52, 54], [-52, -45], [-56, 55], [88, 0], [-88, 0]];
+  const groupedPlacements = groupedTagPlacements(tags, project);
+  groupedPlacements.clusters.forEach(cluster => drawTagCluster(svg, cluster));
   let selectedGroup = null;
   for (const tag of tags) {
-    const count = offsets.get(tag.reader_id) || 0;
-    offsets.set(tag.reader_id, count + 1);
     const base = project(tag.coordenadas);
-    const offset = positions[count % positions.length];
-    const ring = Math.floor(count / positions.length) * 30;
-    const parking = parkingPlacement(tag, count, project);
-    const x = parking?.x ?? base[0] + offset[0] + Math.sign(offset[0]) * ring;
-    const y = parking?.y ?? base[1] + offset[1] + Math.sign(offset[1] || 1) * ring;
-    const operationalColors = {estacionado: "#18a06f", ingresando: "#3182bd", saliendo: "#f2b705"};
-    const color = operationalColors[parking?.clase] || stateColors[tag.estado] || stateColors.sin_senal;
+    const placement = groupedPlacements.positions.get(tag.id);
+    const x = placement?.x ?? base[0];
+    const y = placement?.y ?? base[1];
+    const operationalColors = {"en-turno": "#18a06f", ingresando: "#3182bd", saliendo: "#f2b705"};
+    const color = operationalColors[placement?.clase] || stateColors[tag.estado] || stateColors.sin_senal;
     const pendingMessage = window.pendingTagAlerts?.get(tag.id) || null;
     const pendingText = pendingMessage ? `, mensaje pendiente: ${pendingMessage.titulo}` : "";
-    const group = svgElement("g", {class: `tag-node ${tag.estado} ${parking?.clase || ""}${pendingMessage ? " has-pending-message" : ""}${selectedTagId === tag.id ? " selected" : ""}`, tabindex: "0", role: "button", "data-tag-id": tag.id, "aria-label": `${tag.id}, ${tag.nombre}, ${parking?.estado || labels[tag.estado] || tag.estado}${pendingText}`});
+    const group = svgElement("g", {class: `tag-node ${tag.estado} ${placement?.clase || ""}${pendingMessage ? " has-pending-message" : ""}${tag.gps_asociado ? " has-gps" : ""}${selectedTagId === tag.id ? " selected" : ""}`, tabindex: "0", role: "button", "data-tag-id": tag.id, "aria-label": `${tag.id}, ${tag.nombre}, ${placement?.estado || labels[tag.estado] || tag.estado}${tag.gps_asociado ? ", con geotracker GPS" : ""}${pendingText}`});
     const tooltip = svgElement("title");
-    tooltip.textContent = `${tag.id} · ${tag.nombre}\n${tag.tipo} · ${tag.persona}\nEstado operativo: ${parking?.estado || labels[tag.estado] || tag.estado}\nDistancia aproximada: ${tag.distancia == null ? "sin datos" : `${tag.distancia} m`}\nÚltimo reader: ${tag.reader_nombre || "sin reader"}`;
+    tooltip.textContent = `${tag.id} · ${tag.nombre}\n${tag.codigo_personal || tag.persona} · ${tag.cargo || tag.tipo}\nEstado de turno: ${placement?.estado || tag.estado_turno || labels[tag.estado] || tag.estado}\nDistancia aproximada: ${tag.distancia == null ? "sin datos" : `${tag.distancia} m`}\nÚltimo reader: ${tag.reader_nombre || "sin reader"}`;
     group.appendChild(tooltip);
-    group.appendChild(svgElement("line", {x1: base[0], y1: base[1], x2: x, y2: y, stroke: color, "stroke-width": "2", "stroke-dasharray": "4 3"}));
-    group.appendChild(svgElement("circle", {cx: x, cy: y, r: 19, class: "tag-marker", style: `fill:${color}`}));
+    group.appendChild(svgElement("line", {x1: base[0], y1: base[1], x2: x, y2: y, class: "tag-reader-link", stroke: color}));
+    group.appendChild(svgElement("circle", {cx: x, cy: y, r: placement?.markerRadius || 18, class: "tag-marker", style: `fill:${color}`}));
     drawText(group, x, y + 4, tagNumber(tag), "tag-marker-number");
     group.appendChild(svgElement("circle", {cx: x + 15, cy: y - 14, r: 9, class: "tag-kind-marker"}));
-    drawText(group, x + 15, y - 11, tag.categoria === "maquinaria" ? "M" : "C", "tag-kind-letter");
+    drawText(group, x + 15, y - 11, tag.categoria === "persona" ? "P" : "T", "tag-kind-letter");
+    if (tag.gps_asociado) {
+      group.appendChild(svgElement("circle", {cx: x - 15, cy: y + 14, r: 9, class: "tag-gps-marker"}));
+      drawText(group, x - 15, y + 17, "G", "tag-gps-letter");
+    }
     if (pendingMessage) {
       group.appendChild(svgElement("circle", {cx: x - 15, cy: y - 14, r: 7, class: "tag-message-alert"}));
       drawText(group, x - 15, y - 11.5, "!", "tag-message-alert-symbol");
     }
-    drawTagLabel(group, x, y, tag, parking ? tag.reader_id !== "RX-01" : offset[1] > 0, pendingMessage, parking?.estado || "");
+    drawTagLabel(group, x, y, tag, placement?.placeBelow ?? y < 310, pendingMessage, placement?.estado || "");
     group.addEventListener("click", event => { event.stopPropagation(); selectMapTag(svg, group, tag.id); });
     group.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); selectMapTag(svg, group, tag.id); } });
     svg.appendChild(group);
@@ -221,7 +294,7 @@ function renderMine() {
   }
   svg.classList.toggle("has-tag-selection", Boolean(selectedGroup));
   if (selectedGroup) svg.appendChild(selectedGroup);
-  $("layoutStatus").textContent = `${mineLayout.nombre} · ${tags.length} vehículo${tags.length === 1 ? "" : "s"} detectado${tags.length === 1 ? "" : "s"}`;
+  $("layoutStatus").textContent = `${mineLayout.nombre} · ${tags.length} persona${tags.length === 1 ? "" : "s"} detectada${tags.length === 1 ? "" : "s"}`;
   $("readerList").innerHTML = (mineLayout.readers || []).map(reader => `<article class="reader-card ${reader.disponible ? "active" : "pending"}"><strong><i></i>${esc(reader.id)} · ${esc(reader.nombre)}</strong><span>${esc(reader.sector)} · ${esc(reader.transporte)}</span><span>${reader.disponible ? "Disponible ahora" : "Pendiente de instalación"}</span></article>`).join("");
 }
 
