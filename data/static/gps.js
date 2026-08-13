@@ -302,7 +302,7 @@ async function openGpsPanel() {
   const [authorized] = await Promise.all([loadGpsTracker(), loadOfflineGpsMap()]);
   if (!authorized) {
     gpsEl("gpsAccessNote").textContent = "Inicia sesión como supervisor o administrador para mostrar la ubicación exacta.";
-    if (typeof window.openSupervisorPanel === "function") window.openSupervisorPanel();
+    if (typeof window.openSupervisorForGps === "function") window.openSupervisorForGps();
     return;
   }
   gpsEl("gpsPanel").hidden = false;
@@ -315,6 +315,7 @@ window.addEventListener("mina:tag-selected", event => {
   renderBeaconGpsLink();
 });
 window.addEventListener("mina:access-change", () => loadGpsTracker());
+window.addEventListener("mina:gps-access-granted", openGpsPanel);
 gpsEl("tagGpsSelectionOpen").addEventListener("click", openGpsPanel);
 gpsEl("gpsOpen").addEventListener("click", openGpsPanel);
 gpsEl("gpsRefresh").addEventListener("click", loadGpsTracker);

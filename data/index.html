@@ -172,7 +172,7 @@
   <div class="alarm message-popup" id="alarm" hidden><span>!</span><div><strong id="alarmTitle">Mensaje operativo</strong><small id="alarmText"></small></div><button id="dismissAlarm" class="button-alarm" type="button">Ver mensaje</button></div>
   <div class="supervisor-backdrop" id="supervisorModal" hidden>
     <section class="supervisor-dialog" role="dialog" aria-modal="true" aria-labelledby="supervisorTitle">
-      <div class="dialog-head"><div><span class="label">ACCESO RESTRINGIDO</span><h2 id="supervisorTitle">Panel del supervisor</h2></div><button id="supervisorClose" type="button" aria-label="Cerrar">×</button></div>
+      <div class="dialog-head"><div><span id="supervisorEyebrow" class="label">ACCESO RESTRINGIDO</span><h2 id="supervisorTitle">Panel del supervisor</h2></div><button id="supervisorClose" type="button" aria-label="Cerrar">×</button></div>
       <form id="loginForm" class="login-form"><label>Nombre del supervisor<input id="supervisorLoginName" maxlength="40" autocomplete="name" lang="es-CL" spellcheck="true" autocorrect="on" autocapitalize="words" inputmode="text" placeholder="Ej.: María Soto" required><small class="field-limit">Máximo 40 caracteres · revisión ortográfica solicitada al navegador</small></label><label>PIN de seis dígitos<span class="pin-input-wrap"><input id="supervisorPin" type="password" inputmode="numeric" maxlength="6" pattern="[0-9]{6}" autocomplete="current-password" required><button class="pin-toggle" type="button" data-pin-target="supervisorPin" aria-label="Mostrar PIN" title="Mostrar PIN"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2 10s2.8-5 8-5 8 5 8 5-2.8 5-8 5-8-5-8-5Z"></path><circle cx="10" cy="10" r="2.2"></circle></svg></button></span><small>Ingresa los 6 dígitos para continuar.</small></label><button id="supervisorLoginSubmit" type="submit" disabled>Ingresar como supervisor</button><p id="loginError" role="alert"></p></form>
       <form id="messageForm" class="compose-form" hidden>
         <div class="form-row"><label>Emisor autenticado<input id="messageAuthor" maxlength="40" value="" readonly required><small id="messageAuthorCount" class="field-limit">Identidad asociada a esta sesión</small></label><label>Destino<select id="messageTarget"><option value="todos">Todo el personal</option><option value="TAG-001">TAG-001 · Trabajador minero 01</option><option value="TAG-002">TAG-002 · Trabajador minero 02</option><option value="TAG-003">TAG-003 · Trabajador minero 03</option></select></label></div>
@@ -200,7 +200,7 @@
   </div>
   <script src="/static/app.js?v=20260813-29"></script>
   <script src="/static/rtls.js?v=20260813-21"></script>
-  <script src="/static/messages.js?v=20260813-29"></script>
-  <script src="/static/gps.js?v=20260813-02"></script>
+  <script src="/static/messages.js?v=20260813-30"></script>
+  <script src="/static/gps.js?v=20260813-03"></script>
 </body>
 </html>

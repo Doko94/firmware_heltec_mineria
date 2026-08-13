@@ -27,6 +27,63 @@ def json_candidates(text: str, marker: str):
         offset += 1
 
 
+def history_markers(text: str):
+    start = 0
+    while True:
+        start = text.find('{"version":1,"eventos":', start)
+        if start < 0:
+            return
+        yield start
+        start += 1
+
+
+def salvage_history(text: str):
+    """Recupera el mayor documento aunque una copia tenga bytes reciclados.
+
+    Si raw_decode no alcanza el cierre del documento, extrae objetos de la
+    matriz de eventos y conserva los contadores si siguen disponibles.
+    """
+    decoder = json.JSONDecoder()
+    candidates = []
+    for start in history_markers(text):
+        try:
+            value, _ = decoder.raw_decode(text[start:])
+            if isinstance(value, dict) and isinstance(value.get("eventos"), list):
+                candidates.append(value)
+                continue
+        except json.JSONDecodeError:
+            pass
+        events_start = text.find("[", start)
+        if events_start < 0:
+            continue
+        cursor = events_start + 1
+        events = []
+        while cursor < len(text):
+            while cursor < len(text) and text[cursor] in " \r\n\t,":
+                cursor += 1
+            if cursor >= len(text) or text[cursor] != "{":
+                break
+            try:
+                item, consumed = decoder.raw_decode(text[cursor:])
+            except json.JSONDecodeError:
+                break
+            if not isinstance(item, dict) or "beacon_id" not in item:
+                break
+            events.append(item)
+            cursor += consumed
+        if events:
+            candidates.append({"version": 1, "eventos": events, "contadores": []})
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda value: (
+            max((int(item.get("fecha") or 0) for item in value["eventos"]), default=0),
+            len(value["eventos"]),
+        ),
+    )
+
+
 def latest_history(text: str):
     candidates = []
     for offset, value in json_candidates(text, '{"version":1,"eventos":'):
@@ -34,7 +91,8 @@ def latest_history(text: str):
             continue
         latest = max((int(item.get("fecha") or 0) for item in value["eventos"]), default=0)
         candidates.append(((latest, offset), value))
-    return max(candidates, default=(None, None), key=lambda item: item[0] or (0, 0))[1]
+    valid = max(candidates, default=(None, None), key=lambda item: item[0] or (0, 0))[1]
+    return valid or salvage_history(text)
 
 
 def latest_gps(text: str):

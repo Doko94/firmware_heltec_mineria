@@ -2,6 +2,7 @@ let supervisorAuthenticated = false;
 let adminAuthenticated = false;
 let currentSupervisorName = "";
 let supervisorMessages = [];
+let supervisorAccessPurpose = "messages";
 const messagePopupSeenKey = "mina-local-message-popups-v1";
 let seenMessagePopups = new Set();
 try {
@@ -149,7 +150,7 @@ function syncMessageComposerAccess() {
     ? currentSupervisorName
     : adminAuthenticated ? "Administrador" : "";
   $("loginForm").hidden = canPublish;
-  $("messageForm").hidden = !canPublish;
+  $("messageForm").hidden = !canPublish || supervisorAccessPurpose !== "messages";
 }
 
 window.focusSupervisorMessage = function focusSupervisorMessage(id) {
@@ -182,17 +183,28 @@ async function checkSupervisorSession() {
   renderAccessRole();
 }
 
-function openSupervisor() {
+function setSupervisorAccessPurpose(purpose = "messages") {
+  supervisorAccessPurpose = purpose === "gps" ? "gps" : "messages";
+  const gpsAccess = supervisorAccessPurpose === "gps";
+  $("supervisorEyebrow").textContent = gpsAccess ? "UBICACI\u00d3N PROTEGIDA" : "ACCESO RESTRINGIDO";
+  $("supervisorTitle").textContent = gpsAccess ? "Acceso para ver trabajador por GPS" : "Panel del supervisor";
+  $("supervisorLoginSubmit").textContent = gpsAccess ? "Autorizar y ver GPS" : "Ingresar como supervisor";
+  syncMessageComposerAccess();
+}
+
+function openSupervisor(purpose = "messages") {
+  setSupervisorAccessPurpose(typeof purpose === "string" ? purpose : "messages");
   $("supervisorModal").hidden = false;
   $("loginError").textContent = "";
   $("publishStatus").textContent = "";
   checkSupervisorSession().then(() => { if (!supervisorAuthenticated && !adminAuthenticated) $("supervisorLoginName").focus(); });
 }
 window.openSupervisorPanel = openSupervisor;
+window.openSupervisorForGps = () => openSupervisor("gps");
 
 function closeSupervisor() { $("supervisorModal").hidden = true; }
 
-$("supervisorOpen").addEventListener("click", openSupervisor);
+$("supervisorOpen").addEventListener("click", () => openSupervisor("messages"));
 $("supervisorClose").addEventListener("click", closeSupervisor);
 $("supervisorModal").addEventListener("click", event => { if (event.target === $("supervisorModal")) closeSupervisor(); });
 
@@ -235,10 +247,16 @@ $("loginForm").addEventListener("submit", async event => {
   currentSupervisorName = session.nombre;
   $("messageAuthor").value = currentSupervisorName;
   $("loginForm").hidden = true;
-  $("messageForm").hidden = false;
   renderSupervisorMessages();
   renderAccessRole();
-  $("messageTitle").focus();
+  if (supervisorAccessPurpose === "gps") {
+    $("messageForm").hidden = true;
+    closeSupervisor();
+    window.dispatchEvent(new CustomEvent("mina:gps-access-granted"));
+  } else {
+    $("messageForm").hidden = false;
+    $("messageTitle").focus();
+  }
   setButtonLoading(submit, false);
   syncSupervisorLoginButton();
 });
