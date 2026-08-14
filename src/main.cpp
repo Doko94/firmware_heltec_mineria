@@ -85,11 +85,12 @@ constexpr uint8_t STATE_CONFIRM_OBSERVATIONS = 2;
 constexpr uint32_t READER_SWITCH_CONFIRM_MS = 1500;
 constexpr uint8_t READER_SWITCH_OBSERVATIONS = 3;
 constexpr uint8_t RSSI_WINDOW_SIZE = 7;
-// RX-01 anuncia su estado cada 1,2 s. Cuatro segundos toleran al menos tres
-// tramas perdidas y, al mismo tiempo, permiten que RX-03 asuma el portal sin
-// que el telefono quede esperando cerca de diez segundos.
-constexpr uint32_t READER_HEARTBEAT_TIMEOUT_MS = 4000;
+// RX-01 anuncia su estado cada 1,2 s. El respaldo espera cinco tramas ausentes
+// antes de duplicar el SSID; al arrancar sin RX-01 conserva la gracia rapida
+// definida abajo. Esto evita que un breve ruido LoRa haga oscilar al telefono.
+constexpr uint32_t READER_HEARTBEAT_TIMEOUT_MS = 6500;
 constexpr uint32_t PORTAL_ELECTION_GRACE_MS = 3000;
+constexpr uint32_t PORTAL_HANDOVER_CONFIRM_MS = 2500;
 // Primero se intenta el BSSID conocido de RX-02. Si no responde, RX-03
 // publica MINA-LOCAL rápidamente, sin efectuar un barrido completo de canales.
 constexpr uint32_t EMERGENCY_AP_DELAY_MS = 1200;
@@ -274,6 +275,7 @@ SSD1306Wire oledDisplay(0x3C, SDA_OLED, SCL_OLED, GEOMETRY_128_64,
                         I2C_ONE, 400000);
 String supervisorName;
 bool adminAuthenticated = false;
+String adminName;
 uint64_t clockEpochBase = 0;
 uint32_t clockMillisBase = 0;
 uint32_t lastStateRefresh = 0;
@@ -286,9 +288,16 @@ bool oledReady = false;
 bool portalAccessPointActive = false;
 bool readerPortalActive[READER_COUNT] = {false, false, false};
 uint32_t portalElectionStartedAt = 0;
+uint32_t preferredPortalStableSince = 0;
 uint32_t meshGatewayLastSeen = 0;
 
 void renderOledStatus();
+
+String authenticatedOperatorName() {
+  if (!supervisorName.isEmpty()) return supervisorName;
+  if (adminAuthenticated && !adminName.isEmpty()) return adminName;
+  return "Administrador";
+}
 
 uint64_t epochNow() {
   if (clockEpochBase == 0) return 0;
@@ -313,15 +322,16 @@ int activePortalIndex() {
 }
 
 String activeCoordinatorId() {
+  // Cada reader que publica MINA-LOCAL atiende su propio portal. Informar el
+  // reader local permite comprobar desde la pagina a que BSSID se asocio el
+  // telefono, aunque otros puntos de acceso sigan disponibles por LoRa.
+  if (portalAccessPointActive) return READER_ID;
   const int index = activePortalIndex();
   return index >= 0 ? READERS[index].id : "buscando";
 }
 
 String localCoordinatorRole() {
-  if (portalAccessPointActive) {
-    return LOCAL_READER_INDEX == 0 ? "coordinador_preferido"
-                                   : "coordinador_respaldo";
-  }
+  if (portalAccessPointActive) return "punto_acceso_distribuido";
   return "reader_distribuido";
 }
 
@@ -438,6 +448,13 @@ void confirmTagTransition(TagState& tag, const String& next, uint32_t evidenceAt
     return;
   }
   if (next == "sin_senal") {
+    commitTagTransition(tag, next);
+    return;
+  }
+  // UUID, major y minor ya fueron validados antes de llegar aqui. Cuando un
+  // TAG reaparece, mostrarlo con el primer anuncio evita demoras sin aumentar
+  // el uso de la radio; las transiciones posteriores conservan dos muestras.
+  if (tag.status == "sin_senal") {
     commitTagTransition(tag, next);
     return;
   }
@@ -829,7 +846,7 @@ void publishMeshMessage() {
   message.id = String(moment != 0 ? moment : millis()) + "-" + String(esp_random(), HEX) + "-mesh";
   message.direction = "saliente";
   message.body = text;
-  message.author = supervisorName.isEmpty() ? "Administrador" : supervisorName;
+  message.author = authenticatedOperatorName();
   message.status = "en_cola";
   message.timestamp = moment;
   message.updatedAt = moment;
@@ -1542,7 +1559,7 @@ void publishMessage() {
   message.level = level;
   message.title = title;
   message.body = text;
-  message.author = supervisorName.isEmpty() ? "Administrador" : supervisorName;
+  message.author = authenticatedOperatorName();
   message.timestamp = epochNow();
   message.active = true;
   message.confirmedBy = "";
@@ -1570,7 +1587,7 @@ void handleDynamicApi() {
         server.send(401, "text/plain; charset=utf-8", "Sesión de supervisor o administrador requerida");
         return;
       }
-      messages[index].confirmedBy = supervisorName.isEmpty() ? "Administrador" : supervisorName;
+      messages[index].confirmedBy = authenticatedOperatorName();
       messages[index].confirmedAt = epochNow();
       messages[index].active = false;
       saveMessages();
@@ -1625,8 +1642,23 @@ void serveIndex() {
     server.send(500, "text/plain; charset=utf-8", "Falta cargar LittleFS. Ejecuta Upload Filesystem Image una vez.");
     return;
   }
+  // El documento de entrada no se almacena en cache: los recursos estaticos
+  // ya llevan version, pero iOS puede conservar una copia incompleta del HTML
+  // cuando la ventana cautiva se abre durante la asociacion Wi-Fi.
+  server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  server.sendHeader("Pragma", "no-cache");
   server.streamFile(file, "text/html; charset=utf-8");
   file.close();
+}
+
+void redirectCaptivePortal() {
+  // Los sistemas operativos consultan URLs diferentes para saber si existe
+  // Internet. Una redireccion explicita hace que abran MINA-LOCAL en vez de
+  // interpretar un HTML grande como una comprobacion de conectividad fallida.
+  server.sendHeader("Location", "http://192.168.4.1/", true);
+  server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  server.sendHeader("Pragma", "no-cache");
+  server.send(302, "text/plain; charset=utf-8", "Abriendo MINA-LOCAL");
 }
 
 void serveMutableBackup(const char* path) {
@@ -1820,7 +1852,8 @@ void postObservationsToHub() {}
 void pushCoordinatorSnapshotToBackup() {}
 
 void configureWeb() {
-  server.on("/", HTTP_GET, serveIndex);
+  server.on("/", HTTP_ANY, serveIndex);
+  server.on("/index.html", HTTP_ANY, serveIndex);
   server.on("/diagnostico", HTTP_GET, []() {
     String text = "Reader " + String(READER_ID) + " activo\nRed: " + String(AP_SSID) +
                   "\nIP MINA-LOCAL: " + WiFi.softAPIP().toString() +
@@ -1906,23 +1939,31 @@ void configureWeb() {
     supervisorName = ""; JsonDocument response; response["autenticado"] = false; sendJson(200, response);
   });
   server.on("/api/administrador/estado", HTTP_GET, []() {
-    JsonDocument response; response["autenticado"] = adminAuthenticated; response["rol"] = "administrador"; sendJson(200, response);
+    JsonDocument response; response["autenticado"] = adminAuthenticated; response["rol"] = "administrador"; response["nombre"] = adminName; sendJson(200, response);
   });
   server.on("/api/administrador/login", HTTP_POST, []() {
     JsonDocument body; if (!parseJsonBody(body)) return;
-    const String pin = body["pin"] | "";
+    const String pin = body["pin"] | ""; String name = body["nombre"] | ""; name.trim();
     if (pin != ADMIN_PIN) { server.send(401, "text/plain; charset=utf-8", "PIN de administrador incorrecto"); return; }
-    adminAuthenticated = true; JsonDocument response; response["autenticado"] = true; response["rol"] = "administrador"; sendJson(200, response);
+    if (name.isEmpty() || name.length() > 40) { server.send(400, "text/plain; charset=utf-8", "Nombre de administrador inválido"); return; }
+    adminAuthenticated = true; adminName = name; JsonDocument response; response["autenticado"] = true; response["rol"] = "administrador"; response["nombre"] = name; sendJson(200, response);
   });
   server.on("/api/administrador/logout", HTTP_POST, []() {
-    adminAuthenticated = false; JsonDocument response; response["autenticado"] = false; sendJson(200, response);
+    adminAuthenticated = false; adminName = ""; JsonDocument response; response["autenticado"] = false; sendJson(200, response);
   });
-  server.serveStatic("/static/", LittleFS, "/static/");
-  server.on("/generate_204", HTTP_ANY, serveIndex);
-  server.on("/hotspot-detect.html", HTTP_ANY, serveIndex);
-  server.on("/library/test/success.html", HTTP_ANY, serveIndex);
-  server.on("/ncsi.txt", HTTP_ANY, serveIndex);
-  server.on("/connecttest.txt", HTTP_ANY, serveIndex);
+  // Los recursos llevan version en la URL. Cachearlos evita volver a transferir
+  // cerca de 180 KB cada vez que iOS reabre el portal cautivo.
+  server.serveStatic("/static/", LittleFS, "/static/", "public, max-age=86400");
+  server.on("/generate_204", HTTP_ANY, redirectCaptivePortal);
+  server.on("/gen_204", HTTP_ANY, redirectCaptivePortal);
+  server.on("/hotspot-detect.html", HTTP_ANY, redirectCaptivePortal);
+  server.on("/library/test/success.html", HTTP_ANY, redirectCaptivePortal);
+  server.on("/success.html", HTTP_ANY, redirectCaptivePortal);
+  server.on("/canonical.html", HTTP_ANY, redirectCaptivePortal);
+  server.on("/ncsi.txt", HTTP_ANY, redirectCaptivePortal);
+  server.on("/connecttest.txt", HTTP_ANY, redirectCaptivePortal);
+  server.on("/redirect", HTTP_ANY, redirectCaptivePortal);
+  server.on("/fwlink", HTTP_ANY, redirectCaptivePortal);
   server.onNotFound(handleDynamicApi);
   server.begin();
 }
@@ -2142,18 +2183,12 @@ void IRAM_ATTR onLoRaPacket() {
 void startNetwork() {
   WiFi.persistent(false);
   portalElectionStartedAt = millis();
-
-  if (LOCAL_READER_INDEX != 0) {
-    // Mantiene inicializada la pila TCP/IP para que WebServer pueda arrancar,
-    // pero no publica ningun SSID mientras este reader sea respaldo.
-    WiFi.mode(WIFI_STA);
-    WiFi.setSleep(true);
-    Serial.printf("[RED] %s en espera; respaldo automatico de MINA-LOCAL\n", READER_ID);
-    return;
-  }
-
   WiFi.mode(WIFI_AP);
-  WiFi.setSleep(true);
+  // Todos los readers BLE publican la misma celda logica de MINA-LOCAL. Cada
+  // Heltec conserva un BSSID propio, por lo que el telefono puede elegir el AP
+  // mas fuerte sin esperar a que desaparezca el enlace LoRa de otro reader.
+  // El AP no se apaga mientras el equipo siga encendido.
+  WiFi.setSleep(false);
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
   const IPAddress localIp(192, 168, 4, 1);
   const IPAddress subnet(255, 255, 255, 0);
@@ -2166,7 +2201,7 @@ void startNetwork() {
   dnsServer.start(DNS_PORT, "*", localIp);
   portalAccessPointActive = true;
   readerPortalActive[LOCAL_READER_INDEX] = true;
-  Serial.printf("[RED] %s disponible desde %s en http://%s (canal %u)\n",
+  Serial.printf("[RED] %s distribuido disponible desde %s en http://%s (canal %u)\n",
                 AP_SSID, READER_ID, localIp.toString().c_str(), AP_CHANNEL);
 }
 
@@ -2174,7 +2209,7 @@ void startPortalAccessPoint() {
   if (portalAccessPointActive) return;
 
   WiFi.mode(WIFI_AP);
-  WiFi.setSleep(true);
+  WiFi.setSleep(false);
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
   const IPAddress localIp(192, 168, 4, 1);
   const IPAddress subnet(255, 255, 255, 0);
@@ -2219,34 +2254,10 @@ void maintainPortalElection() {
   }
   if (oledNeedsRefresh) renderOledStatus();
 
-  if (LOCAL_READER_INDEX == 0) {
-    if (!portalAccessPointActive) startPortalAccessPoint();
-    return;
-  }
-
-  bool preferredReaderOnline = false;
-  bool preferredPortalActive = false;
-  for (size_t index = 0; index < LOCAL_READER_INDEX; ++index) {
-    if (readerOnline(index, now)) {
-      preferredReaderOnline = true;
-      if (readerPortalActive[index]) preferredPortalActive = true;
-    }
-  }
-
-  // Un respaldo que ya esta atendiendo clientes solo entrega el portal cuando
-  // el reader preferido confirma que su propio SoftAP ya quedo operativo.
-  if (portalAccessPointActive) {
-    if (preferredPortalActive) stopPortalAccessPoint();
-    return;
-  }
-
-  // En el arranque se da prioridad al reader de numero menor para impedir que
-  // dos equipos creen el mismo SSID mientras se completa la eleccion.
-  if (preferredReaderOnline) return;
-
-  if (now - portalElectionStartedAt >= PORTAL_ELECTION_GRACE_MS) {
-    startPortalAccessPoint();
-  }
+  // La disponibilidad Wi-Fi ya no depende de la distancia LoRa. Esto evita la
+  // zona muerta en la que RX-03 todavia escucha a RX-01 por LoRa, pero el
+  // telefono ya no alcanza el SoftAP de RX-01.
+  if (!portalAccessPointActive) startPortalAccessPoint();
 }
 
 void startLoRa() {
@@ -2367,6 +2378,8 @@ void receiveLoRaObservations() {
   const bool remotePortalActive = (frame.count & LORA_PORTAL_ACTIVE_FLAG) != 0;
   if (readerPortalActive[remoteIndex] != remotePortalActive) {
     readerPortalActive[remoteIndex] = remotePortalActive;
+    Serial.printf("[RED] %s informa portal %s\n", READERS[remoteIndex].id,
+                  remotePortalActive ? "activo" : "en espera");
     renderOledStatus();
   }
   for (uint8_t index = 0; index < readingCount; ++index) {
@@ -2394,10 +2407,10 @@ void startBluetooth() {
   // WiFi por la radio de 2.4 GHz sin aportar informacion adicional.
   scanner->setActiveScan(false);
   scanner->setMaxResults(0);
-  // Escucha BLE el 92 % del ciclo. El pequeno descanso restante protege la
-  // respuesta del portal Wi-Fi, que comparte la radio de 2,4 GHz con BLE.
-  scanner->setInterval(120);
-  scanner->setWindow(110);
+  // Un 75 % de escucha mantiene deteccion rapida y reserva tiempo suficiente
+  // para que DHCP, DNS y HTTP del portal cautivo no queden bloqueados.
+  scanner->setInterval(160);
+  scanner->setWindow(120);
   scanner->start(0, false, true);
 }
 

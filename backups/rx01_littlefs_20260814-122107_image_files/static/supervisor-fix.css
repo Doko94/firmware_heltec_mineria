@@ -1,0 +1,4 @@
+.login-form[hidden],
+.compose-form[hidden] {
+  display: none !important;
+}

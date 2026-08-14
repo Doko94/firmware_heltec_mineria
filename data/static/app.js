@@ -202,7 +202,20 @@ function exportReportCsv() {
 }
 
 async function fetchState() {
-  const response = await fetch("/api/estado", { cache: "no-store" });
+  // Un cambio de BSSID invalida la conexion TCP anterior. Acotar la espera
+  // permite que el siguiente intento llegue de inmediato al Heltec que ahora
+  // atiende 192.168.4.1, en vez de depender del timeout largo del navegador.
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 1800);
+  let response;
+  try {
+    response = await fetch("/api/estado", {
+      cache: "no-store",
+      signal: controller.signal
+    });
+  } finally {
+    window.clearTimeout(timeout);
+  }
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   render(await response.json());
 }
@@ -247,8 +260,39 @@ fetch("/api/reloj", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ epoch: Date.now() })
-}).catch(console.error).finally(refreshLocalState);
-// Refleja una nueva lectura BLE en la pagina con hasta un segundo de espera.
-setInterval(refreshLocalState, 1000);
+}).catch(console.error);
+
+// Programa la siguiente consulta solo cuando la anterior termino. setInterval
+// acumulaba peticiones si BLE/Wi-Fi demoraban una respuesta y hacia que el
+// portal pareciera congelado, especialmente dentro del navegador cautivo iOS.
+let stateRefreshTimer = 0;
+let stateRefreshRunning = false;
+async function scheduleLocalStateRefresh() {
+  if (stateRefreshRunning) return;
+  stateRefreshRunning = true;
+  try {
+    await refreshLocalState();
+  } finally {
+    stateRefreshRunning = false;
+    stateRefreshTimer = window.setTimeout(
+      scheduleLocalStateRefresh,
+      document.hidden ? 3500 : 1500
+    );
+  }
+}
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) return;
+  window.clearTimeout(stateRefreshTimer);
+  scheduleLocalStateRefresh();
+});
+// iOS puede conservar abierto el portal cautivo mientras cambia de BSSID. Los
+// eventos de regreso/online adelantan la consulta sin recargar toda la pagina.
+["online", "pageshow", "focus"].forEach(eventName => {
+  window.addEventListener(eventName, () => {
+    window.clearTimeout(stateRefreshTimer);
+    scheduleLocalStateRefresh();
+  });
+});
+scheduleLocalStateRefresh();
 loadReports();
 setInterval(loadReports, 10000);

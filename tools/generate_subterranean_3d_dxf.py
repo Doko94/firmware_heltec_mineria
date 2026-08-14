@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import unicodedata
 from pathlib import Path
 
@@ -23,6 +24,12 @@ LAYER_COLORS = {
     "CRUCERO": 9,
     "CALLE_HUNDIMIENTO": 33,
     "RAMPA_ACCESO": 5,
+    "RAMPA_CARACOL": 5,
+    "ENLACE_RAMPA": 5,
+    "GALERIA_SECUNDARIA": 8,
+    "GALERIA_VENTILACION": 4,
+    "VIA_EVACUACION": 3,
+    "DRENAJE": 5,
     "PIQUE_PRINCIPAL": 7,
     "VENTILACION_INYECCION": 4,
     "VENTILACION_EXTRACCION": 30,
@@ -103,6 +110,30 @@ def add_cross(dxf: Dxf, layer: str, point: list[float], size: float) -> None:
     dxf.line(layer, [x, y, z-size], [x, y, z+size])
 
 
+def helical_segments(layout: dict):
+    """Convierte rampas helicoidales compactas en tramos LINE 3D compatibles con R12."""
+    for ramp in layout.get("rampas_helicoidales", []):
+        center_x, center_y = (float(value) for value in ramp.get("centro", [0, 0]))
+        radius = max(1.0, float(ramp.get("radio_m", 1)))
+        start_angle = math.radians(float(ramp.get("angulo_inicial_deg", 0)))
+        turns = float(ramp.get("vueltas", 1))
+        start_z = float(ramp.get("z_inicio", 0))
+        end_z = float(ramp.get("z_fin", 0))
+        steps = max(16, min(120, int(ramp.get("resolucion", 64))))
+
+        def point_at(index: int) -> list[float]:
+            progress = index / steps
+            angle = start_angle + turns * math.tau * progress
+            return [
+                center_x + math.cos(angle) * radius,
+                center_y + math.sin(angle) * radius,
+                start_z + (end_z - start_z) * progress,
+            ]
+
+        for index in range(steps):
+            yield ramp.get("capa", "RAMPA_CARACOL"), point_at(index), point_at(index + 1)
+
+
 def generate() -> None:
     layout = json.loads(LAYOUT_PATH.read_text(encoding="utf-8"))
     dxf = Dxf()
@@ -142,6 +173,9 @@ def generate() -> None:
 
     for segment in layout.get("segmentos", []):
         dxf.line(segment["capa"], segment["a"], segment["b"])
+
+    for layer, start, end in helical_segments(layout):
+        dxf.line(layer, start, end)
 
     for label in layout.get("etiquetas", []):
         dxf.text("TEXTOS_COTAS", [label["x"], label["y"], label["z"]], label["id"], 9)

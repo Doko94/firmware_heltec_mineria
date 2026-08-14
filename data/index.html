@@ -5,17 +5,17 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#17211f">
   <title>Control de turno minero BLE</title>
-  <link rel="stylesheet" href="/static/styles.css">
-  <link rel="stylesheet" href="/static/rtls.css">
-  <link rel="stylesheet" href="/static/tag-types.css">
-  <link rel="stylesheet" href="/static/hardware-note.css">
-  <link rel="stylesheet" href="/static/messages.css">
-  <link rel="stylesheet" href="/static/mesh-messages.css?v=20260813-01">
-  <link rel="stylesheet" href="/static/gps.css?v=20260813-02">
-  <link rel="stylesheet" href="/static/supervisor-fix.css">
-  <link rel="stylesheet" href="/static/groundhog-theme.css">
-  <link rel="stylesheet" href="/static/contrast-cards.css?v=20260813-40">
-  <link rel="stylesheet" href="/static/subterranean-map.css?v=20260814-02">
+  <link rel="stylesheet" href="/static/styles.css?v=20260814-04">
+  <link rel="stylesheet" href="/static/rtls.css?v=20260814-04" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="/static/tag-types.css?v=20260814-04" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="/static/hardware-note.css?v=20260814-04" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="/static/messages.css?v=20260814-04" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="/static/mesh-messages.css?v=20260814-04" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="/static/gps.css?v=20260814-05" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="/static/supervisor-fix.css?v=20260814-04" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="/static/groundhog-theme.css?v=20260814-04" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="/static/contrast-cards.css?v=20260814-05" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="/static/subterranean-map.css?v=20260814-07" media="print" onload="this.media='all'">
 </head>
 <body>
   <header class="topbar">
@@ -93,7 +93,7 @@
 
     <section class="rtls-module">
       <div class="rtls-head">
-        <div><span class="label">MINA SUBTERRÁNEA · MODELO VECTORIAL 3D CONCEPTUAL</span><h2>Ubicación por nivel y profundidad</h2><p>Cada beacon adopta la cota del RX que confirma la señal BLE más estable. Es ubicación por sector, no una medición altimétrica continua.</p></div>
+        <div><span class="label">MINA SUBTERRÁNEA · MODELO VECTORIAL 3D CONCEPTUAL</span><h2>Ubicación por nivel y profundidad</h2><p>Red block caving conceptual con galerías operacionales y rampa helicoidal entre cotas. Cada beacon adopta la profundidad del RX que confirma la señal BLE más estable.</p></div>
         <a class="dxf-download" href="/static/mina_niveles.dxf" download="mina_subterranea_niveles_conceptual.dxf">Descargar DXF</a>
       </div>
       <div class="tag-explainer">
@@ -102,18 +102,33 @@
         <article><span class="tag-symbol reader">R2</span><div><strong>RX02 · Cota −450 m</strong><small>Zona prevista para el Nivel 2 cuando RX02 opere como lector BLE.</small></div></article>
         <article><span class="tag-symbol reader">R3</span><div><strong>RX03 · Cota −650 m</strong><small>Confirma presencia en la galería profunda del Nivel 3.</small></div></article>
       </div>
-      <div class="hardware-note"><strong>Profundidad inferida:</strong> los beacons vinculados a un mismo RX se ordenan automáticamente dentro de su nivel. Toca un punto para ver nombre, cota y profundidad. RX02 está actualmente dedicado al gateway Meshtastic; para usar los tres niveles BLE se necesita devolver RX02 a modo lector y disponer de otro gateway.</div>
+      <div class="hardware-note"><strong>Profundidad inferida:</strong> los beacons vinculados a un mismo RX se ordenan automáticamente dentro de su nivel. La rampa tipo caracol y los ramales secundarios son conceptuales y ayudan a visualizar las conexiones verticales; no representan un plano operacional real. RX02 continúa dedicado al gateway Meshtastic.</div>
+      <div class="mine-level-selector" role="group" aria-label="Nivel visible del mapa">
+        <button class="active" type="button" data-mine-level="ALL">Vista general</button>
+        <button type="button" data-mine-level="N1">Nivel 1 <small>−250 m</small></button>
+        <button type="button" data-mine-level="N2">Nivel 2 <small>−450 m</small></button>
+        <button type="button" data-mine-level="N3">Nivel 3 <small>−650 m</small></button>
+        <span id="mineLevelHint">Selecciona un nivel para localizar RX y TAG por zona; acerca el mapa para revelar sus identificadores.</span>
+      </div>
+      <div class="mine-area-selector">
+        <label for="mineAreaSelect"><span>ZOOM POR ZONA</span><strong>Ir a un área específica</strong></label>
+        <select id="mineAreaSelect" aria-describedby="mineAreaHint" disabled>
+          <option value="">Cargando zonas de la mina…</option>
+        </select>
+        <span id="mineAreaHint">Solo este menú cambia de zona. Los gestos desplazan o amplían la vista actual hasta 12×.</span>
+      </div>
       <div class="layout-actions map-toolbar" aria-label="Herramientas del mapa">
         <label for="dxfFile" class="admin-layout-control button-primary" hidden>Importar DXF</label><input id="dxfFile" type="file" accept=".dxf">
-        <button id="resetView" class="button-map" type="button">Centrar mapa</button>
-        <button id="mapRotate3d" class="button-map zoom-only" type="button" aria-label="Girar vista tridimensional" title="Girar vista 3D"><svg class="zoom-icon" viewBox="0 0 32 32" aria-hidden="true"><path d="m16 3 11 6-11 6L5 9l11-6Z"></path><path d="m5 9v13l11 7 11-7V9M16 15v14"></path><path d="M8 4.5A14 14 0 0 0 2.5 12M2.5 12 2 7.5M2.5 12 7 11"></path></svg><span class="visually-hidden">Girar vista 3D</span></button>
+        <button id="resetView" class="button-map" type="button">Centrar</button>
+        <button id="mapRotateLeft" class="button-map zoom-only rotate-map" type="button" aria-label="Girar mapa a la izquierda" title="Girar a la izquierda"><svg class="zoom-icon" viewBox="0 0 32 32" aria-hidden="true"><path d="M8.5 10.5H3V5"></path><path d="M3.8 10A12 12 0 1 1 3.5 22"></path></svg><span class="visually-hidden">Girar a la izquierda</span></button>
+        <button id="mapRotateRight" class="button-map zoom-only rotate-map" type="button" aria-label="Girar mapa a la derecha" title="Girar a la derecha"><svg class="zoom-icon" viewBox="0 0 32 32" aria-hidden="true"><path d="M23.5 10.5H29V5"></path><path d="M28.2 10A12 12 0 1 0 28.5 22"></path></svg><span class="visually-hidden">Girar a la derecha</span></button>
         <button id="refresh" class="button-map zoom-only refresh-map" type="button" aria-label="Actualizar estados" title="Actualizar estados"><svg class="refresh-icon" viewBox="0 0 32 32" aria-hidden="true"><path d="M25.3 10.3A11 11 0 0 0 6 9.1"></path><path d="M6.2 4.7 6 9.4l4.7.1"></path><path d="M6.7 21.7A11 11 0 0 0 26 22.9"></path><path d="m25.8 27.3.2-4.7-4.7-.1"></path></svg><span class="visually-hidden">Actualizar estados</span></button>
         <button id="mapZoomIn" class="button-map zoom-only" type="button" aria-label="Acercar mapa" title="Acercar mapa"><svg class="zoom-icon" viewBox="0 0 32 32" aria-hidden="true"><circle cx="13.5" cy="13.5" r="8.5"></circle><path d="m20 20 7 7M9.5 13.5h8M13.5 9.5v8"></path></svg></button>
         <button id="mapZoomOut" class="button-map zoom-only" type="button" aria-label="Alejar mapa" title="Alejar mapa"><svg class="zoom-icon" viewBox="0 0 32 32" aria-hidden="true"><circle cx="13.5" cy="13.5" r="8.5"></circle><path d="m20 20 7 7M9.5 13.5h8"></path></svg></button>
       </div>
       <div class="mine-layout">
         <svg id="mineSvg" viewBox="0 0 1000 560" role="img" aria-label="Modelo vectorial tridimensional conceptual de una mina subterránea con tres niveles de profundidad"></svg>
-        <div class="map-help">Cubo: girar modelo 3D · pinza o botones para zoom · arrastra para desplazarte</div>
+        <div class="map-help">El menú cambia de zona · pinza o botones: zoom · un dedo: desplazar sin cambiar de nivel</div>
         <div class="depth-legend"><span>Cota 0</span><i></i><span>Cota −650 m</span></div>
         <div class="map-status" id="layoutStatus">Cargando layout…</div>
       </div>
@@ -197,6 +212,16 @@
   </main>
 
   <div class="alarm message-popup" id="alarm" hidden><span>!</span><div><strong id="alarmTitle">Mensaje operativo</strong><small id="alarmText"></small></div><button id="dismissAlarm" class="button-alarm" type="button">Ver mensaje</button></div>
+  <div class="supervisor-backdrop" id="gpsRoleModal" hidden>
+    <section class="supervisor-dialog gps-role-dialog" role="dialog" aria-modal="true" aria-labelledby="gpsRoleTitle">
+      <div class="dialog-head"><div><span class="label">UBICACIÓN PROTEGIDA</span><h2 id="gpsRoleTitle">¿Cómo quieres ingresar?</h2></div><button id="gpsRoleClose" type="button" aria-label="Cerrar">×</button></div>
+      <p>Elige un perfil para autorizar la consulta de la ubicación exacta del trabajador.</p>
+      <div class="gps-role-options">
+        <button id="gpsRoleSupervisor" class="gps-role-option supervisor" type="button"><strong>Supervisor</strong><small>Nombre y PIN de 6 dígitos</small></button>
+        <button id="gpsRoleAdmin" class="gps-role-option admin" type="button"><strong>Administrador</strong><small>Nombre y PIN de 5 dígitos</small></button>
+      </div>
+    </section>
+  </div>
   <div class="supervisor-backdrop" id="supervisorModal" hidden>
     <section class="supervisor-dialog" role="dialog" aria-modal="true" aria-labelledby="supervisorTitle">
       <div class="dialog-head"><div><span id="supervisorEyebrow" class="label">ACCESO RESTRINGIDO</span><h2 id="supervisorTitle">Panel del supervisor</h2></div><button id="supervisorClose" type="button" aria-label="Cerrar">×</button></div>
@@ -212,8 +237,9 @@
   </div>
   <div class="supervisor-backdrop" id="adminModal" hidden>
     <section class="supervisor-dialog admin-dialog" role="dialog" aria-modal="true" aria-labelledby="adminTitle">
-      <div class="dialog-head"><div><span class="label">CONTROL DEL SISTEMA</span><h2 id="adminTitle">Panel del administrador</h2></div><button id="adminClose" type="button" aria-label="Cerrar">×</button></div>
+      <div class="dialog-head"><div><span id="adminEyebrow" class="label">CONTROL DEL SISTEMA</span><h2 id="adminTitle">Panel del administrador</h2></div><button id="adminClose" type="button" aria-label="Cerrar">×</button></div>
       <form id="adminLoginForm" class="login-form">
+        <label>Nombre del administrador<input id="adminLoginName" maxlength="40" autocomplete="name" lang="es-CL" spellcheck="true" autocorrect="on" autocapitalize="words" inputmode="text" placeholder="Ej.: Andrés Pérez" required><small>Identifica quién autoriza la consulta.</small></label>
         <label>PIN de administrador<span class="pin-input-wrap"><input id="adminPin" type="password" inputmode="numeric" maxlength="5" pattern="[0-9]{5}" autocomplete="current-password" required><button class="pin-toggle" type="button" data-pin-target="adminPin" aria-label="Mostrar PIN" title="Mostrar PIN"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2 10s2.8-5 8-5 8 5 8 5-2.8 5-8 5-8-5-8-5Z"></path><circle cx="10" cy="10" r="2.2"></circle></svg></button></span><small>Ingresa los 5 dígitos para continuar.</small></label>
         <button id="adminLoginSubmit" type="submit" disabled>Ingresar como administrador</button><p id="adminLoginError" role="alert"></p>
       </form>
@@ -225,10 +251,10 @@
       </section>
     </section>
   </div>
-  <script src="/static/app.js?v=20260814-01"></script>
-  <script src="/static/rtls.js?v=20260814-02"></script>
-  <script src="/static/messages.js?v=20260813-30"></script>
-  <script src="/static/mesh-messages.js?v=20260813-01"></script>
-  <script src="/static/gps.js?v=20260813-03"></script>
+  <script defer src="/static/app.js?v=20260814-05"></script>
+  <script defer src="/static/rtls.js?v=20260814-09"></script>
+  <script defer src="/static/messages.js?v=20260814-05"></script>
+  <script defer src="/static/mesh-messages.js?v=20260814-04"></script>
+  <script defer src="/static/gps.js?v=20260814-05"></script>
 </body>
 </html>

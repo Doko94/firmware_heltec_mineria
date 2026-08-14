@@ -1,0 +1,210 @@
+.tag-label-depth {
+  fill: #f1ca00 !important;
+  font-size: 9px !important;
+  font-weight: 900 !important;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .14s ease;
+}
+
+.tag-node:hover .tag-label-depth,
+.tag-node:focus .tag-label-depth,
+.tag-node.selected .tag-label-depth {
+  opacity: 1;
+}
+
+#mineSvg.has-tag-selection .tag-node:not(.selected) .tag-label-depth {
+  opacity: 0;
+}
+
+#mineSvg .layer-superficie { stroke: #d8e1dc; stroke-width: 5; opacity: 1; }
+#mineSvg .tunnel-core.layer-superficie { stroke: #6f8078; stroke-width: 1.5; }
+#mineSvg .layer-perfil-roca { stroke: #596760; stroke-width: 3; opacity: .7; }
+#mineSvg .tunnel-core.layer-perfil-roca { stroke: #202a26; stroke-width: 1; }
+#mineSvg .layer-nivel-1 { stroke: #9cbf36; stroke-width: 9; opacity: .88; }
+#mineSvg .layer-nivel-2 { stroke: #d99818; stroke-width: 9; opacity: .88; }
+#mineSvg .layer-nivel-3 { stroke: #c84235; stroke-width: 9; opacity: .88; }
+#mineSvg .layer-nivel-1.tunnel-core,
+#mineSvg .layer-nivel-2.tunnel-core,
+#mineSvg .layer-nivel-3.tunnel-core { stroke: #17211f; stroke-width: 3; }
+#mineSvg .layer-rampa-acceso { stroke: #4ca7d8; stroke-width: 6; stroke-dasharray: 10 5; opacity: .95; }
+#mineSvg .tunnel-core.layer-rampa-acceso { stroke: #18394a; stroke-width: 2; }
+#mineSvg .layer-pique-principal { stroke: #d7e0db; stroke-width: 5; opacity: .9; }
+#mineSvg .layer-ventilacion { stroke: #59c5c8; stroke-width: 4; stroke-dasharray: 7 5; opacity: .85; }
+#mineSvg .layer-refugio { stroke: #42bd7d; stroke-width: 4; opacity: .95; }
+#mineSvg .layer-chancado { stroke: #f2b705; stroke-width: 5; opacity: .95; }
+#mineSvg .layer-traspaso-mineral { stroke: #b47bd6; stroke-width: 4; stroke-dasharray: 5 4; opacity: .9; }
+
+.reader-node.active circle { stroke-width: 4; }
+.reader-node.pending circle { stroke: #8d9792; }
+.reader-card strong + span { font-weight: 750; color: #394740; }
+
+.level-plane {
+  stroke-width: 1.5;
+  filter: drop-shadow(0 10px 10px rgba(0, 0, 0, .28));
+}
+.level-plane.plane-n1 { fill: rgba(156, 191, 54, .12); stroke: rgba(189, 216, 103, .52); }
+.level-plane.plane-n2 { fill: rgba(217, 152, 24, .11); stroke: rgba(240, 186, 78, .48); }
+.level-plane.plane-n3 { fill: rgba(200, 66, 53, .10); stroke: rgba(225, 105, 92, .44); }
+.level-plane-outline { fill: none; stroke-width: 1.2; stroke-dasharray: 7 5; }
+.level-plane-outline.plane-n1 { stroke: rgba(197, 224, 111, .58); }
+.level-plane-outline.plane-n2 { stroke: rgba(241, 193, 95, .54); }
+.level-plane-outline.plane-n3 { stroke: rgba(231, 120, 106, .50); }
+
+.macroblock-face { stroke: rgba(225, 233, 228, .24); stroke-width: 1; }
+.macroblock-face.n1 { fill: rgba(151, 178, 71, .15); }
+.macroblock-face.n2 { fill: rgba(193, 131, 38, .14); }
+.macroblock-face.n3 { fill: rgba(173, 64, 52, .14); }
+.macroblock-face.side { filter: brightness(.72); }
+.macroblock-face.top { filter: brightness(1.28); }
+.macroblock-label { fill: rgba(230, 238, 233, .62) !important; font-size: 8px !important; font-weight: 850 !important; }
+
+#mineSvg .layer-galeria-produccion { stroke: #d7e0db; stroke-width: 8; opacity: .88; }
+#mineSvg .tunnel-core.layer-galeria-produccion { stroke: #26322d; stroke-width: 3; }
+#mineSvg .layer-galeria-retorno { stroke: #7fa8bb; stroke-width: 7; opacity: .82; }
+#mineSvg .tunnel-core.layer-galeria-retorno { stroke: #213b47; stroke-width: 2.5; }
+#mineSvg .layer-crucero { stroke: #8f9e97; stroke-width: 6; opacity: .76; }
+#mineSvg .tunnel-core.layer-crucero { stroke: #29342f; stroke-width: 2; }
+#mineSvg .layer-calle-hundimiento { stroke: #9c8753; stroke-width: 5; stroke-dasharray: 8 4; opacity: .82; }
+#mineSvg .layer-ventilacion-inyeccion { stroke: #4ec7d1; stroke-width: 5; stroke-dasharray: 8 4; }
+#mineSvg .layer-ventilacion-extraccion { stroke: #d98043; stroke-width: 5; stroke-dasharray: 8 4; }
+#mineSvg .layer-chimenea-escape { stroke: #e5e9e6; stroke-width: 4; stroke-dasharray: 3 5; }
+#mineSvg .layer-taller { stroke: #6ba4c2; stroke-width: 5; }
+#mineSvg .layer-subestacion { stroke: #c6aa45; stroke-width: 5; }
+#mineSvg .layer-bombeo { stroke: #4f9ec5; stroke-width: 5; }
+
+.reader-node.active circle {
+  animation: underground-reader-pulse 2.4s ease-in-out infinite;
+  filter: drop-shadow(0 0 7px rgba(241, 202, 0, .52));
+}
+
+/* Plano tecnico: galerias con borde, nucleo y eje operacional. */
+.mine-layout {
+  background:
+    radial-gradient(circle at 72% 12%, rgba(64, 91, 79, .52), transparent 38%),
+    linear-gradient(155deg, #17231e 0%, #0b1210 72%, #080d0b 100%) !important;
+  box-shadow: inset 0 0 0 1px rgba(215, 230, 222, .08), inset 0 -70px 90px rgba(0, 0, 0, .24);
+}
+
+#mineSvg .tunnel,
+#mineSvg .tunnel-core,
+#mineSvg .tunnel-axis {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+#mineSvg .layer-galeria-produccion.tunnel {
+  stroke: #dce6e1;
+  stroke-width: 10;
+  opacity: .92;
+  filter: drop-shadow(0 3px 3px rgba(0, 0, 0, .65));
+}
+#mineSvg .tunnel-core.layer-galeria-produccion { stroke: #34423c; stroke-width: 6; opacity: 1; }
+#mineSvg .tunnel-axis.layer-galeria-produccion { stroke: #f2cf37; stroke-width: 1.3; stroke-dasharray: 9 7; opacity: .88; }
+
+#mineSvg .layer-galeria-retorno.tunnel {
+  stroke: #91adba;
+  stroke-width: 9;
+  opacity: .9;
+  filter: drop-shadow(0 3px 3px rgba(0, 0, 0, .58));
+}
+#mineSvg .tunnel-core.layer-galeria-retorno { stroke: #29414b; stroke-width: 5; opacity: 1; }
+#mineSvg .tunnel-axis.layer-galeria-retorno { stroke: #b9deee; stroke-width: 1.2; stroke-dasharray: 8 7; opacity: .82; }
+
+#mineSvg .layer-galeria-servicio.tunnel { stroke: #92a9a0; stroke-width: 8; opacity: .86; }
+#mineSvg .tunnel-core.layer-galeria-servicio { stroke: #263b34; stroke-width: 4.5; opacity: 1; }
+#mineSvg .tunnel-axis.layer-galeria-servicio { stroke: #71d2a4; stroke-width: 1.15; stroke-dasharray: 7 6; opacity: .88; }
+#mineSvg .layer-galeria-perimetral.tunnel { stroke: #6f8279; stroke-width: 6.5; opacity: .72; }
+#mineSvg .tunnel-core.layer-galeria-perimetral { stroke: #23322c; stroke-width: 3.2; opacity: 1; }
+#mineSvg .tunnel-axis.layer-galeria-perimetral { stroke: #a9bbb2; stroke-width: 1; stroke-dasharray: 5 7; opacity: .62; }
+#mineSvg .layer-camara-maniobras.tunnel { stroke: #d0ad58; stroke-width: 7.5; opacity: .9; }
+#mineSvg .tunnel-core.layer-camara-maniobras { stroke: #4b3c1f; stroke-width: 4; opacity: 1; }
+
+#mineSvg .layer-crucero.tunnel { stroke: #aab7b1; stroke-width: 8; opacity: .8; }
+#mineSvg .tunnel-core.layer-crucero { stroke: #314039; stroke-width: 4; opacity: 1; }
+#mineSvg .tunnel-axis.layer-rampa-acceso { stroke: #9edaff; stroke-width: 1.3; stroke-dasharray: 8 6; opacity: .92; }
+#mineSvg .layer-rampa-caracol.tunnel {
+  stroke: #59bde8;
+  stroke-width: 11;
+  opacity: .96;
+  filter: drop-shadow(0 4px 4px rgba(0, 0, 0, .7));
+}
+#mineSvg .tunnel-core.layer-rampa-caracol { stroke: #183b4d; stroke-width: 6; opacity: 1; }
+#mineSvg .tunnel-axis.layer-rampa-caracol { stroke: #d4f2ff; stroke-width: 1.35; stroke-dasharray: 8 6; opacity: .95; }
+#mineSvg .layer-enlace-rampa.tunnel { stroke: #77c9eb; stroke-width: 9; opacity: .92; }
+#mineSvg .tunnel-core.layer-enlace-rampa { stroke: #204757; stroke-width: 4.5; opacity: 1; }
+#mineSvg .tunnel-axis.layer-enlace-rampa { stroke: #d5f1fb; stroke-width: 1.15; stroke-dasharray: 6 5; opacity: .9; }
+#mineSvg .layer-galeria-secundaria.tunnel { stroke: #8d9c95; stroke-width: 7; opacity: .8; }
+#mineSvg .tunnel-core.layer-galeria-secundaria { stroke: #293731; stroke-width: 3.5; opacity: 1; }
+#mineSvg .tunnel-axis.layer-galeria-secundaria { stroke: #bfcac5; stroke-width: 1; stroke-dasharray: 5 6; opacity: .72; }
+#mineSvg .tunnel-axis.layer-calle-hundimiento { stroke: #f0c775; stroke-width: 1.15; stroke-dasharray: 4 5; opacity: .88; }
+
+.gallery-terminal {
+  fill: #f0d453;
+  stroke: #17211f;
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
+}
+
+.office-area-label {
+  paint-order: stroke fill;
+  stroke: rgba(8, 15, 12, .94);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  fill: #e3ebe7 !important;
+  font-size: 8.5px !important;
+  letter-spacing: .055em;
+}
+.office-area-label.label-n1 { fill: #d4e995 !important; }
+.office-area-label.label-n2 { fill: #f0ca7c !important; }
+.office-area-label.label-n3 { fill: #eca69c !important; }
+
+.reader-label-plate {
+  fill: rgba(7, 14, 11, .9);
+  stroke: rgba(218, 229, 223, .4);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.reader-node.active .reader-label-plate { stroke: rgba(241, 202, 0, .78); }
+.reader-node .reader-label {
+  fill: #edf3ef !important;
+  font-size: 9px !important;
+  font-weight: 850 !important;
+  paint-order: stroke fill;
+  stroke: #07100c;
+  stroke-width: 2px;
+}
+
+/* El grupo de TAG queda suspendido sobre el RX, nunca encima del circulo. */
+.tag-cluster-stem {
+  fill: none;
+  stroke: rgba(241, 202, 0, .72);
+  stroke-width: 1.6;
+  stroke-dasharray: 4 4;
+  vector-effect: non-scaling-stroke;
+}
+.tag-cluster-area {
+  fill: rgba(7, 16, 12, .58);
+  stroke: rgba(214, 228, 220, .44);
+  stroke-width: 1.2;
+  stroke-dasharray: none;
+  filter: drop-shadow(0 7px 10px rgba(0, 0, 0, .38));
+}
+.tag-cluster-badge {
+  fill: rgba(8, 14, 11, .97);
+  stroke: #f1ca00;
+  stroke-width: 1.4;
+}
+.tag-reader-link { opacity: .36; stroke-width: 1.3px; stroke-dasharray: 4 4; }
+
+@keyframes underground-reader-pulse {
+  0%, 100% { stroke-width: 3; }
+  50% { stroke-width: 5; }
+}
+
+@media (max-width: 600px) {
+  .tag-label-depth { font-size: 8.5px !important; }
+  .office-area-label { font-size: 8px !important; }
+  .reader-node .reader-label { font-size: 8.5px !important; }
+}
