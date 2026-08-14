@@ -108,6 +108,24 @@ def latest_gps(text: str):
     return max(candidates, default=(None, None), key=lambda item: item[0] or (0, 0))[1]
 
 
+def latest_mesh_messages(text: str):
+    candidates = []
+    for offset, value in json_candidates(text, '{"version":1,"mensajes":'):
+        if not isinstance(value, dict) or not isinstance(value.get("mensajes"), list):
+            continue
+        messages = value["mensajes"]
+        latest = max(
+            [int(item.get("actualizado") or item.get("fecha") or 0) for item in messages]
+            or [0]
+        )
+        candidates.append(((latest, len(messages), offset), value))
+    return max(
+        candidates,
+        default=(None, None),
+        key=lambda item: item[0] or (0, 0, 0),
+    )[1]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("image", type=Path)
@@ -118,6 +136,7 @@ def main():
     recovered = {
         "historial.json": latest_history(text),
         "gps_tracker.json": latest_gps(text),
+        "mensajes_mesh.json": latest_mesh_messages(text),
     }
     for name, value in recovered.items():
         if value is None:
@@ -126,9 +145,15 @@ def main():
         if name == "historial.json":
             items = value.get("eventos", [])
             latest = max((int(item.get("fecha") or 0) for item in items), default=0)
-        else:
+        elif name == "gps_tracker.json":
             items = value.get("history", [])
             latest = int((value.get("position") or {}).get("timestamp") or 0)
+        else:
+            items = value.get("mensajes", [])
+            latest = max(
+                [int(item.get("actualizado") or item.get("fecha") or 0) for item in items]
+                or [0]
+            )
         print(f"{name}: {len(items)} registros, ultima marca {latest}")
         if args.output:
             args.output.mkdir(parents=True, exist_ok=True)

@@ -6,6 +6,7 @@ let mapDrag = null;
 const mapPointers = new Map();
 let pinchState = null;
 let selectedTagId = null;
+let mapYaw = -35 * Math.PI / 180;
 const stateColors = {
   peligro: "#e24335",
   precaucion: "#f2b705",
@@ -73,6 +74,26 @@ function projector(layout) {
     const y = (Number(point[1]) - bounds.minY) / rangeY;
     return [60 + x * 880, 520 - y * 460];
   };
+  if (layout.vista === "perfil") return point => {
+    const x = (Number(point[0]) - bounds.minX) / rangeX;
+    const z = (Number(point[2]) - bounds.minZ) / rangeZ;
+    return [60 + x * 880, 500 - z * 420];
+  };
+  if (layout.vista === "subterranea_3d") {
+    const centerX = (bounds.minX + bounds.maxX) / 2;
+    const centerY = (bounds.minY + bounds.maxY) / 2;
+    const horizontalSpan = Math.max(rangeX, rangeY * 1.75, 1);
+    const cosine = Math.cos(mapYaw);
+    const sine = Math.sin(mapYaw);
+    return point => {
+      const x = (Number(point[0]) - centerX) / horizontalSpan;
+      const y = (Number(point[1]) - centerY) / horizontalSpan;
+      const depth = (bounds.maxZ - Number(point[2])) / rangeZ;
+      const rotatedX = x * cosine - y * sine;
+      const rotatedY = x * sine + y * cosine;
+      return [500 + rotatedX * 790, 72 + depth * 405 + rotatedY * 205];
+    };
+  }
   return point => {
     const x = (Number(point[0]) - bounds.minX) / rangeX;
     const y = (Number(point[1]) - bounds.minY) / rangeY;
@@ -90,6 +111,63 @@ function drawText(group, x, y, text, className = "reader-label") {
 function tagNumber(tag) {
   const match = String(tag.id || "").match(/(\d+)$/);
   return match ? match[1].padStart(2, "0") : "--";
+}
+
+function readerDepth(readerId) {
+  const zoneDepth = Number(mineLayout?.zonas_operativas?.[readerId]?.profundidad_m);
+  if (Number.isFinite(zoneDepth) && zoneDepth > 0) return zoneDepth;
+  const reader = (mineLayout?.readers || []).find(item => item.id === readerId);
+  const z = Number(reader?.z);
+  return Number.isFinite(z) && z !== 0 ? Math.abs(z) : null;
+}
+
+function depthText(readerId) {
+  const depth = readerDepth(readerId);
+  return depth == null ? "Profundidad sin confirmar" : `Cota -${depth} m · ${depth} m bajo referencia`;
+}
+
+function projectedPoints(points, project) {
+  return points.map(point => project(point).map(value => value.toFixed(1)).join(",")).join(" ");
+}
+
+function drawUndergroundVolume(svg, project) {
+  if (mineLayout?.vista !== "subterranea_3d") return;
+
+  const planes = svgElement("g", {class: "level-planes", "aria-hidden": "true"});
+  [...(mineLayout.planos_nivel || [])].reverse().forEach(plane => {
+    const level = String(plane.id || "nivel").toLowerCase();
+    planes.appendChild(svgElement("polygon", {
+      points: projectedPoints(plane.puntos, project),
+      class: `level-plane plane-${level}`
+    }));
+    const outline = [...plane.puntos, plane.puntos[0]];
+    planes.appendChild(svgElement("polyline", {
+      points: projectedPoints(outline, project),
+      class: `level-plane-outline plane-${level}`
+    }));
+  });
+  svg.appendChild(planes);
+
+  const blocks = svgElement("g", {class: "macroblocks", "aria-hidden": "true"});
+  [...(mineLayout.macrobloques || [])]
+    .sort((a, b) => Number(a.z_inferior) - Number(b.z_inferior))
+    .forEach(block => {
+      const halfX = Number(block.ancho) / 2;
+      const halfY = Number(block.fondo) / 2;
+      const top = Number(block.z_superior);
+      const bottom = Number(block.z_inferior);
+      const x = Number(block.x), y = Number(block.y);
+      const topFace = [[x-halfX,y-halfY,top],[x+halfX,y-halfY,top],[x+halfX,y+halfY,top],[x-halfX,y+halfY,top]];
+      const frontFace = [[x-halfX,y-halfY,top],[x+halfX,y-halfY,top],[x+halfX,y-halfY,bottom],[x-halfX,y-halfY,bottom]];
+      const sideFace = [[x+halfX,y-halfY,top],[x+halfX,y+halfY,top],[x+halfX,y+halfY,bottom],[x+halfX,y-halfY,bottom]];
+      const level = String(block.nivel || "nivel").toLowerCase();
+      blocks.appendChild(svgElement("polygon", {points: projectedPoints(frontFace, project), class: `macroblock-face front ${level}`}));
+      blocks.appendChild(svgElement("polygon", {points: projectedPoints(sideFace, project), class: `macroblock-face side ${level}`}));
+      blocks.appendChild(svgElement("polygon", {points: projectedPoints(topFace, project), class: `macroblock-face top ${level}`}));
+      const labelPoint = project([x, y, top]);
+      drawText(blocks, labelPoint[0], labelPoint[1] - 5, block.id, "macroblock-label");
+    });
+  svg.appendChild(blocks);
 }
 
 function clampMapValue(value, minimum, maximum) {
@@ -114,12 +192,16 @@ function groupedTagPlacements(tags, project) {
   const clusters = [];
   for (const [readerId, readerTags] of grouped.entries()) {
     const zone = mineLayout?.zonas_operativas?.[readerId];
+    const reader = (mineLayout?.readers || []).find(item => item.id === readerId);
     const zonePoints = (zone?.puntos || []).map(point => project(point));
     const fallbackPoints = readerTags.map(tag => project(tag.coordenadas));
     const anchorPoints = zonePoints.length ? zonePoints : fallbackPoints;
     const anchor = anchorPoints.reduce((total, point) => [total[0] + point[0], total[1] + point[1]], [0, 0]);
     anchor[0] /= Math.max(1, anchorPoints.length);
     anchor[1] /= Math.max(1, anchorPoints.length);
+    const readerPoint = reader
+      ? project([reader.x, reader.y, reader.z])
+      : anchor;
 
     const count = readerTags.length;
     const dense = count > 24;
@@ -132,9 +214,13 @@ function groupedTagPlacements(tags, project) {
     const rows = Math.ceil(count / columns);
     const contentWidth = Math.max(0, (columns - 1) * spacingX);
     const contentHeight = Math.max(0, (rows - 1) * spacingY);
-    // El margen horizontal reserva espacio para la ficha que se abre al tocar.
-    const centerX = clampMapValue(anchor[0], 105 + contentWidth / 2, 895 - contentWidth / 2);
-    const centerY = clampMapValue(anchor[1], 70 + contentHeight / 2, 500 - contentHeight / 2);
+    // La grilla queda siempre sobre el circulo del RX. El margen inferior evita
+    // que los marcadores oculten el lector, incluso cuando solo hay un TAG.
+    const clusterWidth = Math.max(132, contentWidth + 54);
+    const clusterHeight = contentHeight + 64;
+    const centerX = clampMapValue(readerPoint[0], 18 + clusterWidth / 2, 982 - clusterWidth / 2);
+    const desiredCenterY = readerPoint[1] - 54 - contentHeight / 2;
+    const centerY = clampMapValue(desiredCenterY, 42 + contentHeight / 2, 485 - contentHeight / 2);
 
     readerTags.forEach((tag, index) => {
       const row = Math.floor(index / columns);
@@ -149,17 +235,22 @@ function groupedTagPlacements(tags, project) {
         estado: zone?.estado || tag.estado_turno || "Ubicacion estimada",
         clase: zone?.clase || (readerId === "RX-01" ? "en-turno" : readerId === "RX-02" ? "ingresando" : "saliendo"),
         markerRadius: veryDense ? 11 : dense ? 14 : 17,
-        placeBelow: y < 310
+        // La ficha se abre hacia arriba para mantener visible el RX inferior.
+        // Solo cambia de lado si el TAG queda muy cerca del borde superior.
+        placeBelow: y < 95
       });
     });
 
     clusters.push({
       readerId,
       count,
-      x: centerX - contentWidth / 2 - 27,
+      x: centerX - clusterWidth / 2,
       y: centerY - contentHeight / 2 - 31,
-      width: contentWidth + 54,
-      height: contentHeight + 61
+      width: clusterWidth,
+      height: clusterHeight,
+      centerX,
+      readerX: readerPoint[0],
+      readerY: readerPoint[1]
     });
   }
   return {positions, clusters};
@@ -167,9 +258,13 @@ function groupedTagPlacements(tags, project) {
 
 function drawTagCluster(svg, cluster) {
   const group = svgElement("g", {class: "tag-cluster", "aria-hidden": "true"});
+  group.appendChild(svgElement("path", {
+    d: `M ${cluster.readerX} ${cluster.readerY - 18} L ${cluster.centerX} ${cluster.y + cluster.height}`,
+    class: "tag-cluster-stem"
+  }));
   group.appendChild(svgElement("rect", {x: cluster.x, y: cluster.y, width: cluster.width, height: cluster.height, rx: 15, class: "tag-cluster-area"}));
-  group.appendChild(svgElement("rect", {x: cluster.x + 9, y: cluster.y - 9, width: 112, height: 23, rx: 8, class: "tag-cluster-badge"}));
-  const count = svgElement("text", {x: cluster.x + 17, y: cluster.y + 7, class: "tag-cluster-title"});
+  group.appendChild(svgElement("rect", {x: cluster.centerX - 58, y: cluster.y - 10, width: 116, height: 24, rx: 9, class: "tag-cluster-badge"}));
+  const count = svgElement("text", {x: cluster.centerX, y: cluster.y + 7, class: "tag-cluster-title", "text-anchor": "middle"});
   count.textContent = `${cluster.readerId} · ${cluster.count} TAG`;
   group.appendChild(count);
   const firstReader = svg.querySelector(".reader-node");
@@ -178,8 +273,8 @@ function drawTagCluster(svg, cluster) {
 }
 
 function drawTagLabel(group, x, y, tag, placeBelow, pendingMessage = null, operationalState = "") {
-  const width = 178;
-  const height = 44;
+  const width = 216;
+  const height = 59;
   const top = placeBelow ? y + 25 : y - height - 25;
   group.appendChild(svgElement("rect", {x: x - width / 2, y: top, width, height, rx: 8, class: "tag-label-card"}));
   const title = svgElement("text", {x, y: top + 17, class: "tag-label-title", "text-anchor": "middle"});
@@ -189,12 +284,15 @@ function drawTagLabel(group, x, y, tag, placeBelow, pendingMessage = null, opera
   const distance = tag.distancia == null ? "sin distancia" : `${tag.distancia} m`;
   detail.textContent = operationalState || `${labels[tag.estado] || tag.estado} · ${distance}`;
   group.appendChild(detail);
+  const depth = svgElement("text", {x, y: top + 49, class: "tag-label-depth", "text-anchor": "middle"});
+  depth.textContent = depthText(tag.reader_id);
+  group.appendChild(depth);
   if (pendingMessage) {
     const action = svgElement("g", {class: "tag-message-link", role: "button", tabindex: "0", "data-message-id": pendingMessage.id, "aria-label": `Abrir mensaje: ${pendingMessage.titulo}`});
-    action.appendChild(svgElement("rect", {x: x - 95, y: top + 47, width: 190, height: 19, rx: 5}));
+    action.appendChild(svgElement("rect", {x: x - 105, y: top + 62, width: 210, height: 19, rx: 5}));
     const title = String(pendingMessage.titulo || "Mensaje pendiente");
     const compactTitle = title.length > 27 ? `${title.slice(0, 26)}…` : title;
-    const actionText = svgElement("text", {x, y: top + 60, "text-anchor": "middle"});
+    const actionText = svgElement("text", {x, y: top + 75, "text-anchor": "middle"});
     actionText.textContent = `! ${compactTitle}`;
     action.appendChild(actionText);
     const openMessage = event => {
@@ -234,24 +332,38 @@ function renderMine() {
   const grid = svgElement("g", {opacity: ".16"});
   for (let y = 80; y < 540; y += 70) grid.appendChild(svgElement("line", {x1: 20, y1: y, x2: 980, y2: y, stroke: "#91a098", "stroke-width": "1"}));
   svg.appendChild(grid);
-  const tunnels = svgElement("g");
+  drawUndergroundVolume(svg, project);
+  const tunnels = svgElement("g", {class: "mine-tunnels", "aria-label": "Galerias y servicios subterraneos"});
+  const axisLayers = new Set(["galeria-produccion", "galeria-retorno", "galeria-servicio", "galeria-perimetral", "rampa-acceso", "calle-hundimiento"]);
   for (const segment of mineLayout.segmentos || []) {
     const a = project(segment.a), b = project(segment.b);
     const layer = String(segment.capa || "general").toLowerCase().replace(/[^a-z0-9]+/g, "-");
-    tunnels.appendChild(svgElement("line", {x1: a[0], y1: a[1], x2: b[0], y2: b[1], class: `tunnel layer-${layer}`}));
-    tunnels.appendChild(svgElement("line", {x1: a[0], y1: a[1], x2: b[0], y2: b[1], class: `tunnel-core layer-${layer}`}));
+    const level = String(segment.nivel || "conexion").toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    tunnels.appendChild(svgElement("line", {x1: a[0], y1: a[1], x2: b[0], y2: b[1], class: `tunnel layer-${layer} level-${level}`}));
+    tunnels.appendChild(svgElement("line", {x1: a[0], y1: a[1], x2: b[0], y2: b[1], class: `tunnel-core layer-${layer} level-${level}`}));
+    if (axisLayers.has(layer)) {
+      tunnels.appendChild(svgElement("line", {x1: a[0], y1: a[1], x2: b[0], y2: b[1], class: `tunnel-axis layer-${layer} level-${level}`}));
+    }
+    if (layer === "galeria-produccion" || layer === "galeria-retorno") {
+      tunnels.appendChild(svgElement("circle", {cx: a[0], cy: a[1], r: 2.8, class: `gallery-terminal level-${level}`}));
+      tunnels.appendChild(svgElement("circle", {cx: b[0], cy: b[1], r: 2.8, class: `gallery-terminal level-${level}`}));
+    }
   }
   svg.appendChild(tunnels);
   for (const label of mineLayout.etiquetas || []) {
     const point = project([label.x, label.y, label.z || 0]);
-    drawText(svg, point[0], point[1] + 4, label.id, "office-area-label");
+    drawText(svg, point[0], point[1] + 4, label.id, `office-area-label label-${String(label.nivel || "general").toLowerCase()}`);
   }
   for (const reader of mineLayout.readers || []) {
     const point = project([reader.x, reader.y, reader.z]);
     const group = svgElement("g", {class: `reader-node ${reader.disponible ? "active" : "pending"}`});
     group.appendChild(svgElement("circle", {cx: point[0], cy: point[1], r: 16}));
     drawText(group, point[0], point[1] + 4, "R");
-    drawText(group, point[0], point[1] + 34, `${reader.id} · ${reader.nombre}`);
+    const compactDepth = readerDepth(reader.id);
+    const readerCaption = compactDepth == null ? reader.id : `${reader.id} · Cota -${compactDepth} m`;
+    const captionWidth = Math.max(88, readerCaption.length * 5.8 + 18);
+    group.appendChild(svgElement("rect", {x: point[0] - captionWidth / 2, y: point[1] + 22, width: captionWidth, height: 20, rx: 7, class: "reader-label-plate"}));
+    drawText(group, point[0], point[1] + 36, readerCaption);
     svg.appendChild(group);
   }
   const tags = state.beacons
@@ -265,13 +377,14 @@ function renderMine() {
     const placement = groupedPlacements.positions.get(tag.id);
     const x = placement?.x ?? base[0];
     const y = placement?.y ?? base[1];
-    const operationalColors = {"en-turno": "#18a06f", ingresando: "#3182bd", saliendo: "#f2b705"};
+    const operationalColors = {"en-turno": "#18a06f", ingresando: "#3182bd", saliendo: "#f2b705", "nivel-1": "#9cbf36", "nivel-2": "#d99818", "nivel-3": "#c84235"};
     const color = operationalColors[placement?.clase] || stateColors[tag.estado] || stateColors.sin_senal;
     const pendingMessage = window.pendingTagAlerts?.get(tag.id) || null;
+    const tagDepth = depthText(tag.reader_id);
     const pendingText = pendingMessage ? `, mensaje pendiente: ${pendingMessage.titulo}` : "";
-    const group = svgElement("g", {class: `tag-node ${tag.estado} ${placement?.clase || ""}${pendingMessage ? " has-pending-message" : ""}${tag.gps_asociado ? " has-gps" : ""}${selectedTagId === tag.id ? " selected" : ""}`, tabindex: "0", role: "button", "data-tag-id": tag.id, "aria-label": `${tag.id}, ${tag.nombre}, ${placement?.estado || labels[tag.estado] || tag.estado}${tag.gps_asociado ? ", con geotracker GPS" : ""}${pendingText}`});
+    const group = svgElement("g", {class: `tag-node ${tag.estado} ${placement?.clase || ""}${pendingMessage ? " has-pending-message" : ""}${tag.gps_asociado ? " has-gps" : ""}${selectedTagId === tag.id ? " selected" : ""}`, tabindex: "0", role: "button", "data-tag-id": tag.id, "aria-label": `${tag.id}, ${tag.nombre}, ${placement?.estado || labels[tag.estado] || tag.estado}, ${tagDepth}${tag.gps_asociado ? ", con geotracker GPS" : ""}${pendingText}`});
     const tooltip = svgElement("title");
-    tooltip.textContent = `${tag.id} · ${tag.nombre}\n${tag.codigo_personal || tag.persona} · ${tag.cargo || tag.tipo}\nEstado de turno: ${placement?.estado || tag.estado_turno || labels[tag.estado] || tag.estado}\nDistancia aproximada: ${tag.distancia == null ? "sin datos" : `${tag.distancia} m`}\nÚltimo reader: ${tag.reader_nombre || "sin reader"}`;
+    tooltip.textContent = `${tag.id} · ${tag.nombre}\n${tag.codigo_personal || tag.persona} · ${tag.cargo || tag.tipo}\nSector: ${placement?.estado || tag.estado_turno || labels[tag.estado] || tag.estado}\nProfundidad estimada: ${tagDepth}\nDistancia al RX: ${tag.distancia == null ? "sin datos" : `${tag.distancia} m`}\nÚltimo reader: ${tag.reader_nombre || "sin reader"}`;
     group.appendChild(tooltip);
     group.appendChild(svgElement("line", {x1: base[0], y1: base[1], x2: x, y2: y, class: "tag-reader-link", stroke: color}));
     group.appendChild(svgElement("circle", {cx: x, cy: y, r: placement?.markerRadius || 18, class: "tag-marker", style: `fill:${color}`}));
@@ -294,8 +407,8 @@ function renderMine() {
   }
   svg.classList.toggle("has-tag-selection", Boolean(selectedGroup));
   if (selectedGroup) svg.appendChild(selectedGroup);
-  $("layoutStatus").textContent = `${mineLayout.nombre} · ${tags.length} persona${tags.length === 1 ? "" : "s"} detectada${tags.length === 1 ? "" : "s"}`;
-  $("readerList").innerHTML = (mineLayout.readers || []).map(reader => `<article class="reader-card ${reader.disponible ? "active" : "pending"}"><strong><i></i>${esc(reader.id)} · ${esc(reader.nombre)}</strong><span>${esc(reader.sector)} · ${esc(reader.transporte)}</span><span>${reader.disponible ? "Disponible ahora" : "Pendiente de instalación"}</span></article>`).join("");
+  $("layoutStatus").textContent = `${mineLayout.nombre} · ${tags.length} beacon${tags.length === 1 ? "" : "s"} con nivel confirmado`;
+  $("readerList").innerHTML = (mineLayout.readers || []).map(reader => `<article class="reader-card ${reader.disponible ? "active" : "pending"}"><strong><i></i>${esc(reader.id)} · ${esc(reader.nombre)}</strong><span>${esc(reader.sector)}</span><span>${esc(depthText(reader.id))} · ${esc(reader.transporte)}</span><span>${reader.disponible ? "Disponible ahora" : "Sin enlace de lectura"}</span></article>`).join("");
 }
 
 window.renderMineTracking = renderMine;
@@ -326,6 +439,10 @@ $("dxfFile").addEventListener("change", async event => {
 $("mapZoomIn").addEventListener("click", () => zoomMap(.78));
 $("mapZoomOut").addEventListener("click", () => zoomMap(1.28));
 $("resetView").addEventListener("click", () => { mapView = {...initialMapView}; applyMapView(); });
+$("mapRotate3d").addEventListener("click", () => {
+  mapYaw += Math.PI / 8;
+  renderMine();
+});
 
 $("mineSvg").addEventListener("wheel", event => {
   event.preventDefault();

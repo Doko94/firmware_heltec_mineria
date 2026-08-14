@@ -55,9 +55,9 @@ struct ReaderConfig {
 };
 
 constexpr ReaderConfig READERS[] = {
-    {"RX-01", "Heltec Reader 1 RX-01", "Punto de formacion y oficina", 66, 38, 0},
-    {"RX-02", "Heltec Reader 2 RX-02", "Porteria y control de acceso", 27, 50, 0},
-    {"RX-03", "Heltec Reader 3 RX-03", "Salida de personal", 110, 15, 0},
+    {"RX-01", "Heltec Reader 1 RX-01", "Nivel 1 - galeria de produccion, cota -250 m", 270, -70, -250},
+    {"RX-02", "Heltec Reader 2 RX-02", "Nivel 2 - galeria intermedia, cota -450 m", 520, 40, -450},
+    {"RX-03", "Heltec Reader 3 RX-03", "Nivel 3 - galeria profunda, cota -650 m", 780, -50, -650},
 };
 constexpr size_t READER_COUNT = sizeof(READERS) / sizeof(READERS[0]);
 constexpr size_t LOCAL_READER_INDEX = MINA_READER_NUMBER - 1;
@@ -76,15 +76,20 @@ constexpr char TARGET_UUID[] = "E2C56DB5DFFB48D2B060D0F5A71096E0";
 constexpr char SUPERVISOR_PIN[] = "123456";
 constexpr char ADMIN_PIN[] = "12345";
 constexpr uint8_t DNS_PORT = 53;
-constexpr uint32_t TAG_TIMEOUT_MS = 12000;
-constexpr uint32_t STATE_REFRESH_MS = 500;
-constexpr uint32_t STATE_CONFIRM_MS = 900;
+constexpr uint32_t TAG_TIMEOUT_MS = 8000;
+constexpr uint32_t STATE_REFRESH_MS = 250;
+// Confirma la primera deteccion con dos anuncios distintos; 300 ms evita un
+// falso positivo aislado sin agregar una demora perceptible al operador.
+constexpr uint32_t STATE_CONFIRM_MS = 300;
 constexpr uint8_t STATE_CONFIRM_OBSERVATIONS = 2;
-constexpr uint32_t READER_SWITCH_CONFIRM_MS = 1200;
-constexpr uint8_t READER_SWITCH_OBSERVATIONS = 2;
-constexpr uint8_t RSSI_WINDOW_SIZE = 5;
-constexpr uint32_t READER_HEARTBEAT_TIMEOUT_MS = 9000;
-constexpr uint32_t PORTAL_ELECTION_GRACE_MS = 6500;
+constexpr uint32_t READER_SWITCH_CONFIRM_MS = 1500;
+constexpr uint8_t READER_SWITCH_OBSERVATIONS = 3;
+constexpr uint8_t RSSI_WINDOW_SIZE = 7;
+// RX-01 anuncia su estado cada 1,2 s. Cuatro segundos toleran al menos tres
+// tramas perdidas y, al mismo tiempo, permiten que RX-03 asuma el portal sin
+// que el telefono quede esperando cerca de diez segundos.
+constexpr uint32_t READER_HEARTBEAT_TIMEOUT_MS = 4000;
+constexpr uint32_t PORTAL_ELECTION_GRACE_MS = 3000;
 // Primero se intenta el BSSID conocido de RX-02. Si no responde, RX-03
 // publica MINA-LOCAL rápidamente, sin efectuar un barrido completo de canales.
 constexpr uint32_t EMERGENCY_AP_DELAY_MS = 1200;
@@ -92,17 +97,20 @@ constexpr uint32_t STARTUP_CONNECT_TIMEOUT_MS = 2200;
 constexpr uint32_t STA_CONNECT_TIMEOUT_MS = 3000;
 constexpr uint32_t STA_RETRY_INTERVAL_MS = 4000;
 constexpr uint32_t EMERGENCY_RECOVERY_PROBE_MS = 6000;
-constexpr float READER_SWITCH_FACTOR = 0.78F;
+// El candidato debe estimarse aproximadamente 4 dB mas fuerte que el lector
+// actual antes de iniciar el cambio de sector (factor de distancia ~= 0,66).
+constexpr float READER_SWITCH_FACTOR = 0.66F;
 constexpr char READER_TOKEN[] = "mina-local-rx-2026";
 // El teléfono ve un único nombre de red, independientemente del reader activo.
 constexpr char EMERGENCY_SSID[] = "MINA-LOCAL";
 constexpr size_t MAX_EVENTS = 120;
 constexpr size_t MAX_MESSAGES = 16;
+constexpr size_t MAX_MESH_MESSAGES = 24;
 constexpr size_t MAX_GPS_POINTS = 48;
 constexpr char GPS_NODE_ID[] = "!f72ad896";
 constexpr uint32_t GPS_NODE_NUM = 4146780310UL;
 constexpr char GPS_BEACON_ID[] = "TAG-001";
-constexpr uint32_t LORA_TX_INTERVAL_MS = 1800;
+constexpr uint32_t LORA_TX_INTERVAL_MS = 1200;
 constexpr float LORA_FREQUENCY_MHZ = 915.0F;
 constexpr float LORA_BANDWIDTH_KHZ = 125.0F;
 constexpr uint8_t LORA_SPREADING_FACTOR = 7;
@@ -204,6 +212,20 @@ struct SupervisorMessage {
   uint64_t confirmedAt = 0;
 };
 
+struct MeshMessage {
+  bool used = false;
+  String id;
+  String direction;
+  String body;
+  String author;
+  String status;
+  uint64_t timestamp = 0;
+  uint64_t updatedAt = 0;
+  uint32_t packetId = 0;
+  int rssi = 0;
+  float snr = 0.0F;
+};
+
 struct GpsPoint {
   double latitude = 0.0;
   double longitude = 0.0;
@@ -240,6 +262,8 @@ EventRecord events[MAX_EVENTS];
 size_t eventCount = 0;
 SupervisorMessage messages[MAX_MESSAGES];
 size_t messageCount = 0;
+MeshMessage meshMessages[MAX_MESH_MESSAGES];
+size_t meshMessageCount = 0;
 GpsTrackerState gpsTracker;
 
 WebServer server(80);
@@ -262,6 +286,7 @@ bool oledReady = false;
 bool portalAccessPointActive = false;
 bool readerPortalActive[READER_COUNT] = {false, false, false};
 uint32_t portalElectionStartedAt = 0;
+uint32_t meshGatewayLastSeen = 0;
 
 void renderOledStatus();
 
@@ -562,8 +587,11 @@ void ingestTag(TagState& tag, int rssi, int advertisedTxPower, const String& rea
   if (observation.filteredRssi < -120.0F) observation.filteredRssi = median;
   else {
     // Limita saltos aislados antes del suavizado exponencial.
-    const float boundedDelta = constrain(median - observation.filteredRssi, -12.0F, 12.0F);
-    observation.filteredRssi += 0.28F * boundedDelta;
+    const float boundedDelta = constrain(median - observation.filteredRssi, -10.0F, 10.0F);
+    const float absoluteDelta = fabsf(boundedDelta);
+    const float alpha = absoluteDelta >= 5.0F ? 0.38F :
+        observation.spread <= 6.0F ? 0.30F : 0.20F;
+    observation.filteredRssi += alpha * boundedDelta;
   }
   observation.distance = estimateDistance(observation.filteredRssi, observation.txPower);
   const uint32_t now = millis();
@@ -667,6 +695,276 @@ void loadMessages() {
     message.confirmedBy = item["confirmado_por"] | "";
     message.confirmedAt = item["confirmado_fecha"] | 0ULL;
   }
+}
+
+void appendMeshMessageJson(JsonObject item, const MeshMessage& message) {
+  item["id"] = message.id;
+  item["direccion"] = message.direction;
+  item["mensaje"] = message.body;
+  item["autor"] = message.author;
+  item["estado"] = message.status;
+  addTimestamp(item, "fecha", message.timestamp);
+  addTimestamp(item, "actualizado", message.updatedAt);
+  if (message.packetId == 0) item["packet_id"] = nullptr;
+  else item["packet_id"] = message.packetId;
+  if (message.direction == "entrante") {
+    item["rssi"] = message.rssi;
+    item["snr"] = serialized(String(message.snr, 1));
+  }
+}
+
+void saveMeshMessages() {
+  File file = LittleFS.open("/mensajes_mesh.json", "w");
+  if (!file) return;
+  JsonDocument document;
+  document["version"] = 1;
+  JsonArray array = document["mensajes"].to<JsonArray>();
+  for (size_t index = 0; index < meshMessageCount; ++index) {
+    if (meshMessages[index].used) appendMeshMessageJson(array.add<JsonObject>(), meshMessages[index]);
+  }
+  serializeJson(document, file);
+  file.close();
+}
+
+void loadMeshMessages() {
+  if (!LittleFS.exists("/mensajes_mesh.json")) return;
+  File file = LittleFS.open("/mensajes_mesh.json", "r");
+  JsonDocument document;
+  if (deserializeJson(document, file)) {
+    file.close();
+    return;
+  }
+  file.close();
+  meshMessageCount = 0;
+  for (JsonObject item : document["mensajes"].as<JsonArray>()) {
+    if (meshMessageCount >= MAX_MESH_MESSAGES) break;
+    MeshMessage& message = meshMessages[meshMessageCount++];
+    message.used = true;
+    message.id = item["id"] | "";
+    message.direction = item["direccion"] | "entrante";
+    message.body = item["mensaje"] | "";
+    message.author = item["autor"] | "";
+    message.status = item["estado"] | "recibido";
+    message.timestamp = item["fecha"] | 0ULL;
+    message.updatedAt = item["actualizado"] | 0ULL;
+    message.packetId = item["packet_id"] | 0U;
+    message.rssi = item["rssi"] | 0;
+    message.snr = item["snr"] | 0.0F;
+  }
+}
+
+MeshMessage& prependMeshMessage() {
+  if (meshMessageCount == MAX_MESH_MESSAGES) {
+    for (size_t index = MAX_MESH_MESSAGES - 1; index > 0; --index) meshMessages[index] = meshMessages[index - 1];
+  } else {
+    for (size_t index = meshMessageCount; index > 0; --index) meshMessages[index] = meshMessages[index - 1];
+    ++meshMessageCount;
+  }
+  meshMessages[0] = MeshMessage{};
+  meshMessages[0].used = true;
+  return meshMessages[0];
+}
+
+int findMeshMessage(const String& id) {
+  for (size_t index = 0; index < meshMessageCount; ++index) {
+    if (meshMessages[index].used && meshMessages[index].id == id) return static_cast<int>(index);
+  }
+  return -1;
+}
+
+bool meshConversationAuthorized() {
+  return adminAuthenticated || !supervisorName.isEmpty();
+}
+
+bool validGatewayBody(JsonDocument& body) {
+  if (!parseJsonBody(body)) return false;
+  const String token = body["token"] | "";
+  if (token == READER_TOKEN) {
+    meshGatewayLastSeen = millis();
+    return true;
+  }
+  server.send(403, "text/plain; charset=utf-8", "Token de gateway invalido");
+  return false;
+}
+
+void sendMeshMessages() {
+  if (!meshConversationAuthorized()) {
+    JsonDocument response;
+    response["autorizado"] = false;
+    response["requiere_rol"] = "supervisor_o_administrador";
+    sendJson(403, response);
+    return;
+  }
+  JsonDocument response;
+  response["autorizado"] = true;
+  response["node_id"] = GPS_NODE_ID;
+  response["trabajador"] = "Trabajador 01";
+  response["gateway_disponible"] = meshGatewayLastSeen != 0 && millis() - meshGatewayLastSeen <= 12000;
+  JsonArray array = response["mensajes"].to<JsonArray>();
+  for (size_t index = 0; index < meshMessageCount; ++index) {
+    if (meshMessages[index].used) appendMeshMessageJson(array.add<JsonObject>(), meshMessages[index]);
+  }
+  sendJson(200, response);
+}
+
+void publishMeshMessage() {
+  if (!meshConversationAuthorized()) {
+    server.send(401, "text/plain; charset=utf-8", "Sesion de supervisor o administrador requerida");
+    return;
+  }
+  JsonDocument body;
+  if (!parseJsonBody(body)) return;
+  String text = body["mensaje"] | "";
+  text.trim();
+  if (text.isEmpty()) {
+    server.send(400, "text/plain; charset=utf-8", "El mensaje es obligatorio");
+    return;
+  }
+  if (text.length() > 180) {
+    server.send(400, "text/plain; charset=utf-8", "Maximo 180 bytes por mensaje Meshtastic");
+    return;
+  }
+  MeshMessage& message = prependMeshMessage();
+  const uint64_t moment = epochNow();
+  message.id = String(moment != 0 ? moment : millis()) + "-" + String(esp_random(), HEX) + "-mesh";
+  message.direction = "saliente";
+  message.body = text;
+  message.author = supervisorName.isEmpty() ? "Administrador" : supervisorName;
+  message.status = "en_cola";
+  message.timestamp = moment;
+  message.updatedAt = moment;
+  saveMeshMessages();
+  JsonDocument response;
+  response["guardado"] = true;
+  response["gateway_disponible"] = meshGatewayLastSeen != 0 && millis() - meshGatewayLastSeen <= 12000;
+  appendMeshMessageJson(response["mensaje"].to<JsonObject>(), message);
+  sendJson(201, response);
+}
+
+void clearMeshMessageHistory() {
+  if (!meshConversationAuthorized()) {
+    server.send(403, "text/plain; charset=utf-8",
+                "Sesion de supervisor o administrador requerida");
+    return;
+  }
+
+  size_t retained = 0;
+  size_t removed = 0;
+  for (size_t index = 0; index < meshMessageCount; ++index) {
+    const MeshMessage& message = meshMessages[index];
+    const bool pendingDelivery = message.used &&
+        message.direction == "saliente" &&
+        (message.status == "en_cola" || message.status == "error" ||
+         message.status == "transmitiendo");
+    if (pendingDelivery) {
+      if (retained != index) meshMessages[retained] = message;
+      ++retained;
+    } else if (message.used) {
+      ++removed;
+    }
+  }
+  for (size_t index = retained; index < meshMessageCount; ++index) {
+    meshMessages[index] = MeshMessage{};
+  }
+  meshMessageCount = retained;
+  saveMeshMessages();
+
+  JsonDocument response;
+  response["eliminados"] = removed;
+  response["pendientes_conservados"] = retained;
+  response["t1000_modificado"] = false;
+  sendJson(200, response);
+}
+
+void sendMeshQueueToGateway() {
+  JsonDocument body;
+  if (!validGatewayBody(body)) return;
+  JsonDocument response;
+  response["disponible"] = false;
+  for (size_t reverse = meshMessageCount; reverse > 0; --reverse) {
+    MeshMessage& message = meshMessages[reverse - 1];
+    if (!message.used || message.direction != "saliente" ||
+        (message.status != "en_cola" && message.status != "error")) continue;
+    response["disponible"] = true;
+    response["id"] = message.id;
+    response["node_id"] = GPS_NODE_ID;
+    response["node_num"] = GPS_NODE_NUM;
+    response["mensaje"] = message.body;
+    break;
+  }
+  sendJson(200, response);
+}
+
+void updateMeshMessageFromGateway() {
+  JsonDocument body;
+  if (!validGatewayBody(body)) return;
+  const String id = body["id"] | "";
+  const String status = body["estado"] | "";
+  const int index = findMeshMessage(id);
+  if (index < 0) {
+    server.send(404, "text/plain; charset=utf-8", "Mensaje Meshtastic no encontrado");
+    return;
+  }
+  if (status != "transmitiendo" && status != "transmitido" &&
+      status != "confirmado" && status != "error") {
+    server.send(400, "text/plain; charset=utf-8", "Estado Meshtastic invalido");
+    return;
+  }
+  MeshMessage& message = meshMessages[index];
+  message.status = status;
+  message.packetId = body["packet_id"] | message.packetId;
+  message.updatedAt = epochNow();
+  saveMeshMessages();
+  JsonDocument response;
+  response["actualizado"] = true;
+  appendMeshMessageJson(response["mensaje"].to<JsonObject>(), message);
+  sendJson(200, response);
+}
+
+void receiveMeshMessageFromGateway() {
+  JsonDocument body;
+  if (!validGatewayBody(body)) return;
+  const String nodeId = body["node_id"] | "";
+  const uint32_t nodeNum = body["node_num"] | 0U;
+  String text = body["mensaje"] | "";
+  text.trim();
+  const uint32_t packetId = body["packet_id"] | 0U;
+  if (nodeId != GPS_NODE_ID || nodeNum != GPS_NODE_NUM) {
+    server.send(409, "text/plain; charset=utf-8", "El mensaje no pertenece al T1000-E de Trabajador 01");
+    return;
+  }
+  if (text.isEmpty() || text.length() > 200 || packetId == 0) {
+    server.send(400, "text/plain; charset=utf-8", "Mensaje Meshtastic entrante invalido");
+    return;
+  }
+  for (size_t index = 0; index < meshMessageCount; ++index) {
+    if (meshMessages[index].direction == "entrante" && meshMessages[index].packetId == packetId) {
+      JsonDocument response;
+      response["recibido"] = true;
+      response["duplicado"] = true;
+      sendJson(200, response);
+      return;
+    }
+  }
+  MeshMessage& message = prependMeshMessage();
+  message.id = String(packetId) + "-in-mesh";
+  message.direction = "entrante";
+  message.body = text;
+  message.author = "Trabajador 01";
+  message.status = "recibido";
+  uint64_t receivedAt = body["timestamp"] | 0ULL;
+  if (receivedAt > 0 && receivedAt < 100000000000ULL) receivedAt *= 1000ULL;
+  message.timestamp = receivedAt != 0 ? receivedAt : epochNow();
+  message.updatedAt = epochNow();
+  message.packetId = packetId;
+  message.rssi = body["rssi"] | 0;
+  message.snr = body["snr"] | 0.0F;
+  saveMeshMessages();
+  JsonDocument response;
+  response["recibido"] = true;
+  response["duplicado"] = false;
+  appendMeshMessageJson(response["mensaje"].to<JsonObject>(), message);
+  sendJson(201, response);
 }
 
 void appendEventJson(JsonArray array, const EventRecord& event) {
@@ -1057,14 +1355,16 @@ void sendState() {
       precision["rssi_filtrado"] = serialized(String(observation.filteredRssi, 1));
       precision["muestras"] = observation.sampleCount;
       precision["ventana"] = observation.windowCount;
+      precision["objetivo_ventana"] = RSSI_WINDOW_SIZE;
       precision["dispersion_db"] = serialized(String(observation.spread, 1));
-      precision["calidad"] = observation.windowCount < 3 ? "inicializando" :
-          observation.spread <= 6.0F ? "alta" : observation.spread <= 12.0F ? "media" : "variable";
+      precision["calidad"] = observation.windowCount < 5 ? "inicializando" :
+          observation.spread <= 7.0F ? "alta" : observation.spread <= 13.0F ? "media" : "variable";
     } else {
       precision["rssi_crudo"] = nullptr;
       precision["rssi_filtrado"] = nullptr;
       precision["muestras"] = 0;
       precision["ventana"] = 0;
+      precision["objetivo_ventana"] = RSSI_WINDOW_SIZE;
       precision["dispersion_db"] = nullptr;
       precision["calidad"] = "sin_senal";
     }
@@ -1577,6 +1877,12 @@ void configureWeb() {
     const size_t removed = messageCount; messageCount = 0; saveMessages();
     JsonDocument response; response["eliminados"] = removed; sendJson(200, response);
   });
+  server.on("/api/meshtastic/mensajes", HTTP_GET, sendMeshMessages);
+  server.on("/api/meshtastic/mensajes", HTTP_POST, publishMeshMessage);
+  server.on("/api/meshtastic/mensajes", HTTP_DELETE, clearMeshMessageHistory);
+  server.on("/api/meshtastic/cola", HTTP_POST, sendMeshQueueToGateway);
+  server.on("/api/meshtastic/estado", HTTP_POST, updateMeshMessageFromGateway);
+  server.on("/api/meshtastic/recibir", HTTP_POST, receiveMeshMessageFromGateway);
   server.on("/api/historial-proximidad", HTTP_DELETE, []() {
     if (!adminAuthenticated) { server.send(403, "text/plain; charset=utf-8", "Se requiere una sesión de administrador"); return; }
     const size_t removed = eventCount; eventCount = 0;
@@ -2019,7 +2325,9 @@ void transmitLocalObservations() {
     LoRaReading& reading = frame.readings[frame.count++];
     reading.major = tag.major;
     reading.minor = tag.minor;
-    reading.rssi = static_cast<int8_t>(constrain(observation.rssi, -127, 0));
+    // Comparte la lectura ya filtrada para que el coordinador no decida el
+    // sector usando un unico pico de RSSI capturado por un reader remoto.
+    reading.rssi = static_cast<int8_t>(constrain(lroundf(observation.filteredRssi), -127L, 0L));
     reading.txPower = static_cast<int8_t>(constrain(observation.txPower, -127, 0));
     const uint32_t age100ms = (now - observation.lastSeen) / 100;
     reading.age100ms = static_cast<uint16_t>(age100ms > 65535 ? 65535 : age100ms);
@@ -2086,8 +2394,10 @@ void startBluetooth() {
   // WiFi por la radio de 2.4 GHz sin aportar informacion adicional.
   scanner->setActiveScan(false);
   scanner->setMaxResults(0);
-  scanner->setInterval(160);
-  scanner->setWindow(80);
+  // Escucha BLE el 92 % del ciclo. El pequeno descanso restante protege la
+  // respuesta del portal Wi-Fi, que comparte la radio de 2,4 GHz con BLE.
+  scanner->setInterval(120);
+  scanner->setWindow(110);
   scanner->start(0, false, true);
 }
 
@@ -2102,6 +2412,7 @@ void setup() {
   else {
     Serial.printf("[FS] %u bytes usados de %u\n", LittleFS.usedBytes(), LittleFS.totalBytes());
     loadMessages();
+    loadMeshMessages();
     loadHistory();
     loadGpsTracker();
   }

@@ -16,11 +16,19 @@ namespace {
 constexpr char WIFI_SSID[] = "MINA-LOCAL";
 constexpr uint8_t WIFI_CHANNEL = 6;
 constexpr char RX01_GPS_ENDPOINT[] = "http://192.168.4.1/api/gps/actualizar";
+constexpr char RX01_QUEUE_ENDPOINT[] = "http://192.168.4.1/api/meshtastic/cola";
+constexpr char RX01_STATUS_ENDPOINT[] = "http://192.168.4.1/api/meshtastic/estado";
+constexpr char RX01_RECEIVE_ENDPOINT[] = "http://192.168.4.1/api/meshtastic/recibir";
 constexpr char READER_TOKEN[] = "mina-local-rx-2026";
 
 constexpr char TRACKER_NODE_ID[] = "!f72ad896";
 constexpr uint32_t TRACKER_NODE_NUM = 4146780310UL;
 constexpr char TRACKER_BEACON_ID[] = "TAG-001";
+
+// Numero Meshtastic derivado de la MAC de este RX-02
+// (D8:85:AC:AA:86:98 -> !acaa8698).
+constexpr uint32_t GATEWAY_NODE_NUM = 0xACAA8698UL;
+constexpr uint32_t MESH_BROADCAST = 0xFFFFFFFFUL;
 
 // Parametros leidos del T1000-E (firmware Meshtastic 2.7.15):
 // region ANZ, preset LONG_FAST, canal primario ALERTA.
@@ -32,8 +40,11 @@ constexpr uint8_t MESH_SYNC_WORD = 0x2B;
 constexpr uint16_t MESH_PREAMBLE_LENGTH = 16;
 constexpr int8_t RECEIVE_POWER_DBM = 14;
 constexpr uint8_t MESH_CHANNEL_HASH = 0x00;
+constexpr uint8_t TEXT_MESSAGE_APP = 1;
 constexpr uint8_t POSITION_APP = 3;
+constexpr uint8_t ROUTING_APP = 5;
 constexpr size_t MESH_HEADER_LENGTH = 16;
+constexpr size_t MESH_MAX_ENCRYPTED_LENGTH = 239;
 
 // Clave AES-256 del canal ALERTA. No se imprime ni se expone por la red.
 constexpr uint8_t MESH_CHANNEL_KEY[32] = {
@@ -45,7 +56,10 @@ constexpr uint8_t MESH_CHANNEL_KEY[32] = {
 
 constexpr uint32_t WIFI_RETRY_MS = 5000;
 constexpr uint32_t POST_RETRY_MS = 5000;
+constexpr uint32_t QUEUE_POLL_MS = 3000;
 constexpr uint32_t OLED_REFRESH_MS = 1000;
+constexpr size_t RECENT_PACKET_COUNT = 16;
+constexpr size_t PENDING_TEXT_COUNT = 4;
 
 struct __attribute__((packed)) MeshHeader {
   uint32_t to;
@@ -68,6 +82,27 @@ struct PositionFix {
   uint32_t precisionBits = 0;
   bool hasLatitude = false;
   bool hasLongitude = false;
+};
+
+struct DecodedData {
+  uint32_t portNumber = 0;
+  const uint8_t* payload = nullptr;
+  size_t payloadLength = 0;
+  uint32_t requestId = 0;
+};
+
+struct PendingIncomingText {
+  String text;
+  uint32_t packetId = 0;
+  float rssi = 0.0F;
+  float snr = 0.0F;
+};
+
+struct PendingMessageStatus {
+  String id;
+  String state;
+  uint32_t packetId = 0;
+  bool active = false;
 };
 
 struct ProtoReader {
@@ -140,11 +175,20 @@ float pendingRssi = 0.0F;
 float pendingSnr = 0.0F;
 uint32_t packetCount = 0;
 uint32_t positionCount = 0;
+uint32_t messageRxCount = 0;
+uint32_t messageTxCount = 0;
 uint32_t lastWifiAttempt = 0;
 uint32_t lastPostAttempt = 0;
+uint32_t lastTextPostAttempt = 0;
+uint32_t lastQueuePoll = 0;
+uint32_t lastStatusAttempt = 0;
 uint32_t lastDisplayRefresh = 0;
-uint32_t lastAcceptedPacketId = 0;
 uint32_t lastPostedTimestamp = 0;
+uint32_t recentPacketIds[RECENT_PACKET_COUNT] = {};
+size_t recentPacketCursor = 0;
+PendingIncomingText pendingTexts[PENDING_TEXT_COUNT];
+size_t pendingTextItems = 0;
+PendingMessageStatus pendingMessageStatus;
 String lastGatewayState = "Iniciando";
 
 void IRAM_ATTR onRadioPacket() {
@@ -152,12 +196,8 @@ void IRAM_ATTR onRadioPacket() {
 }
 
 bool decodeDataEnvelope(const uint8_t* plaintext, size_t plaintextLength,
-                        const uint8_t*& positionPayload,
-                        size_t& positionPayloadLength) {
+                        DecodedData& decoded) {
   ProtoReader reader{plaintext, plaintextLength};
-  uint32_t portNumber = 0;
-  positionPayload = nullptr;
-  positionPayloadLength = 0;
 
   while (reader.position < reader.length) {
     uint64_t key = 0;
@@ -167,15 +207,16 @@ bool decodeDataEnvelope(const uint8_t* plaintext, size_t plaintextLength,
     if (field == 1 && wire == 0) {
       uint64_t value = 0;
       if (!reader.readVarint(value)) return false;
-      portNumber = static_cast<uint32_t>(value);
+      decoded.portNumber = static_cast<uint32_t>(value);
     } else if (field == 2 && wire == 2) {
-      if (!reader.readBytes(positionPayload, positionPayloadLength)) return false;
+      if (!reader.readBytes(decoded.payload, decoded.payloadLength)) return false;
+    } else if (field == 6 && wire == 5) {
+      if (!reader.readFixed32(decoded.requestId)) return false;
     } else if (!reader.skip(wire)) {
       return false;
     }
   }
-  return portNumber == POSITION_APP && positionPayload != nullptr &&
-         positionPayloadLength > 0;
+  return decoded.portNumber != 0 && decoded.payload != nullptr;
 }
 
 bool decodePosition(const uint8_t* payload, size_t payloadLength,
@@ -216,9 +257,9 @@ bool decodePosition(const uint8_t* payload, size_t payloadLength,
          longitude >= -180.0 && longitude <= 180.0;
 }
 
-bool decryptChannelPayload(const MeshHeader& header, const uint8_t* encrypted,
-                           size_t encryptedLength, uint8_t* plaintext) {
-  if (encryptedLength == 0 || encryptedLength > 239) return false;
+bool cryptChannelPayload(const MeshHeader& header, const uint8_t* input,
+                         size_t inputLength, uint8_t* output) {
+  if (inputLength == 0 || inputLength > MESH_MAX_ENCRYPTED_LENGTH) return false;
   uint8_t nonceCounter[16] = {};
   const uint64_t packetId = header.id;
   memcpy(nonceCounter, &packetId, sizeof(packetId));
@@ -230,11 +271,91 @@ bool decryptChannelPayload(const MeshHeader& header, const uint8_t* encrypted,
   mbedtls_aes_init(&context);
   const int keyState = mbedtls_aes_setkey_enc(&context, MESH_CHANNEL_KEY, 256);
   const int cryptState = keyState == 0
-      ? mbedtls_aes_crypt_ctr(&context, encryptedLength, &nonceOffset,
-                             nonceCounter, streamBlock, encrypted, plaintext)
+      ? mbedtls_aes_crypt_ctr(&context, inputLength, &nonceOffset,
+                             nonceCounter, streamBlock, input, output)
       : keyState;
   mbedtls_aes_free(&context);
   return cryptState == 0;
+}
+
+bool appendVarint(uint8_t* output, size_t capacity, size_t& position,
+                  uint64_t value) {
+  do {
+    if (position >= capacity) return false;
+    uint8_t byte = static_cast<uint8_t>(value & 0x7F);
+    value >>= 7;
+    if (value != 0) byte |= 0x80;
+    output[position++] = byte;
+  } while (value != 0);
+  return true;
+}
+
+bool appendBytes(uint8_t* output, size_t capacity, size_t& position,
+                 const uint8_t* value, size_t valueLength) {
+  if (!appendVarint(output, capacity, position, valueLength) ||
+      valueLength > capacity - position) return false;
+  memcpy(output + position, value, valueLength);
+  position += valueLength;
+  return true;
+}
+
+size_t encodeTextEnvelope(const String& text, uint8_t* output,
+                          size_t capacity) {
+  size_t position = 0;
+  if (!appendVarint(output, capacity, position, (1U << 3) | 0U) ||
+      !appendVarint(output, capacity, position, TEXT_MESSAGE_APP) ||
+      !appendVarint(output, capacity, position, (2U << 3) | 2U) ||
+      !appendBytes(output, capacity, position,
+                   reinterpret_cast<const uint8_t*>(text.c_str()),
+                   text.length())) return 0;
+  return position;
+}
+
+bool packetAlreadySeen(uint32_t packetId) {
+  for (const uint32_t recent : recentPacketIds) {
+    if (recent == packetId && packetId != 0) return true;
+  }
+  return false;
+}
+
+void rememberPacket(uint32_t packetId) {
+  recentPacketIds[recentPacketCursor] = packetId;
+  recentPacketCursor = (recentPacketCursor + 1) % RECENT_PACKET_COUNT;
+}
+
+bool queueIncomingText(const uint8_t* payload, size_t payloadLength,
+                       uint32_t packetId, float rssi, float snr) {
+  if (payloadLength == 0 || pendingTextItems >= PENDING_TEXT_COUNT) {
+    Serial.println("[CHAT] Texto descartado: cola local llena o mensaje vacio");
+    return false;
+  }
+  PendingIncomingText& item = pendingTexts[pendingTextItems++];
+  item.text = String(reinterpret_cast<const char*>(payload), payloadLength);
+  item.text.trim();
+  if (item.text.isEmpty()) {
+    --pendingTextItems;
+    return false;
+  }
+  item.packetId = packetId;
+  item.rssi = rssi;
+  item.snr = snr;
+  return true;
+}
+
+bool routingPacketIsAck(const uint8_t* payload, size_t payloadLength) {
+  ProtoReader reader{payload, payloadLength};
+  while (reader.position < reader.length) {
+    uint64_t key = 0;
+    if (!reader.readVarint(key) || key == 0) return false;
+    const uint32_t field = static_cast<uint32_t>(key >> 3);
+    const uint8_t wire = static_cast<uint8_t>(key & 0x07);
+    if (field == 3 && wire == 0) {
+      uint64_t errorReason = 0;
+      return reader.readVarint(errorReason) && errorReason == 0;
+    }
+    if (!reader.skip(wire)) return false;
+  }
+  return false;
 }
 
 void renderStatus() {
@@ -244,16 +365,13 @@ void renderStatus() {
   display.setFont(ArialMT_Plain_16);
   display.drawString(64, 0, "RX-02 GW");
   display.setFont(ArialMT_Plain_10);
-  display.drawString(64, 18, "T1000-E -> RX-01");
+  display.drawString(64, 18, "GPS/CHAT <-> RX-01");
   display.drawString(64, 29, String("LoRa: ") +
                               (radioReady ? "919.625 OK" : "ERROR"));
   display.drawString(64, 40, String("WiFi: ") +
                               (WiFi.status() == WL_CONNECTED ? "MINA-LOCAL" : "buscando"));
-  const String footer = pendingPost
-      ? String("GPS pendiente: ") + positionCount
-      : (lastPostedTimestamp != 0
-             ? String("GPS enviados: ") + positionCount
-             : String("Esperando GPS"));
+  const String footer = String("GPS:") + positionCount + " RX:" +
+                        messageRxCount + " TX:" + messageTxCount;
   display.drawString(64, 51, footer);
   display.display();
 }
@@ -337,28 +455,50 @@ void receiveMeshPacket() {
   MeshHeader header{};
   memcpy(&header, packet, sizeof(header));
   if (header.from != TRACKER_NODE_NUM || header.channel != MESH_CHANNEL_HASH) return;
-  if (header.id == lastAcceptedPacketId) return;
+  if (packetAlreadySeen(header.id)) return;
 
   const size_t encryptedLength = packetLength - MESH_HEADER_LENGTH;
   uint8_t plaintext[240] = {};
-  if (!decryptChannelPayload(header, packet + MESH_HEADER_LENGTH,
-                             encryptedLength, plaintext)) {
+  if (!cryptChannelPayload(header, packet + MESH_HEADER_LENGTH,
+                           encryptedLength, plaintext)) {
     Serial.println("[GATEWAY] No fue posible descifrar el paquete ALERTA");
     return;
   }
 
-  const uint8_t* positionPayload = nullptr;
-  size_t positionPayloadLength = 0;
-  if (!decodeDataEnvelope(plaintext, encryptedLength, positionPayload,
-                          positionPayloadLength)) return;
+  DecodedData decoded;
+  if (!decodeDataEnvelope(plaintext, encryptedLength, decoded)) return;
+  rememberPacket(header.id);
+
+  if (decoded.portNumber == TEXT_MESSAGE_APP) {
+    if (queueIncomingText(decoded.payload, decoded.payloadLength, header.id,
+                          rssi, snr)) {
+      ++messageRxCount;
+      lastGatewayState = "Mensaje recibido";
+      Serial.printf("[CHAT] Trabajador 01: %s (paquete %08lX)\n",
+                    pendingTexts[pendingTextItems - 1].text.c_str(),
+                    static_cast<unsigned long>(header.id));
+    }
+    renderStatus();
+    return;
+  }
+
+  if (decoded.portNumber == ROUTING_APP) {
+    if (decoded.requestId != 0 && routingPacketIsAck(
+            decoded.payload, decoded.payloadLength)) {
+      Serial.printf("[CHAT] Confirmacion Meshtastic para paquete %08lX\n",
+                    static_cast<unsigned long>(decoded.requestId));
+    }
+    return;
+  }
+
+  if (decoded.portNumber != POSITION_APP || decoded.payloadLength == 0) return;
 
   PositionFix fix;
-  if (!decodePosition(positionPayload, positionPayloadLength, fix)) {
+  if (!decodePosition(decoded.payload, decoded.payloadLength, fix)) {
     Serial.println("[GATEWAY] Position_APP recibido sin coordenada valida");
     return;
   }
 
-  lastAcceptedPacketId = header.id;
   pendingFix = fix;
   pendingRssi = rssi;
   pendingSnr = snr;
@@ -420,13 +560,176 @@ void postPendingPosition() {
   renderStatus();
 }
 
+int postJson(const char* endpoint, JsonDocument& document,
+             String* responseBody = nullptr) {
+  if (WiFi.status() != WL_CONNECTED) return -1;
+  String payload;
+  serializeJson(document, payload);
+  WiFiClient client;
+  HTTPClient http;
+  http.setConnectTimeout(1200);
+  http.setTimeout(2200);
+  if (!http.begin(client, endpoint)) return -1;
+  http.addHeader("Content-Type", "application/json");
+  const int status = http.POST(payload);
+  if (responseBody != nullptr && status > 0) *responseBody = http.getString();
+  http.end();
+  return status;
+}
+
+bool updateMessageStatus(const String& id, const String& state,
+                         uint32_t packetId) {
+  JsonDocument document;
+  document["token"] = READER_TOKEN;
+  document["id"] = id;
+  document["estado"] = state;
+  document["packet_id"] = packetId;
+  const int status = postJson(RX01_STATUS_ENDPOINT, document);
+  Serial.printf("[CHAT] Estado %s para %s: HTTP %d\n",
+                state.c_str(), id.c_str(), status);
+  return status >= 200 && status < 300;
+}
+
+void servicePendingMessageStatus() {
+  if (!pendingMessageStatus.active || WiFi.status() != WL_CONNECTED) return;
+  const uint32_t now = millis();
+  if (lastStatusAttempt != 0 && now - lastStatusAttempt < POST_RETRY_MS) return;
+  lastStatusAttempt = now;
+  if (updateMessageStatus(pendingMessageStatus.id,
+                          pendingMessageStatus.state,
+                          pendingMessageStatus.packetId)) {
+    pendingMessageStatus.active = false;
+    lastGatewayState = pendingMessageStatus.state == "transmitido"
+        ? "Mensaje transmitido"
+        : "Error al transmitir";
+    renderStatus();
+  }
+}
+
+void postPendingIncomingText() {
+  if (pendingTextItems == 0 || WiFi.status() != WL_CONNECTED) return;
+  const uint32_t now = millis();
+  if (lastTextPostAttempt != 0 && now - lastTextPostAttempt < POST_RETRY_MS) return;
+  lastTextPostAttempt = now;
+
+  const PendingIncomingText& item = pendingTexts[0];
+  JsonDocument document;
+  document["token"] = READER_TOKEN;
+  document["node_id"] = TRACKER_NODE_ID;
+  document["node_num"] = TRACKER_NODE_NUM;
+  document["mensaje"] = item.text;
+  document["packet_id"] = item.packetId;
+  document["rssi"] = static_cast<int>(lroundf(item.rssi));
+  document["snr"] = serialized(String(item.snr, 1));
+  const int status = postJson(RX01_RECEIVE_ENDPOINT, document);
+  if (status >= 200 && status < 300) {
+    Serial.printf("[CHAT] Mensaje del trabajador entregado a RX-01: HTTP %d\n",
+                  status);
+    for (size_t index = 1; index < pendingTextItems; ++index) {
+      pendingTexts[index - 1] = pendingTexts[index];
+    }
+    pendingTexts[--pendingTextItems] = PendingIncomingText{};
+    lastGatewayState = "Mensaje en la pagina";
+  } else {
+    Serial.printf("[CHAT] RX-01 no acepto el mensaje: HTTP %d\n", status);
+    lastGatewayState = String("Error chat HTTP ") + status;
+  }
+  renderStatus();
+}
+
+int16_t transmitTextToMesh(const String& message, uint32_t& packetId) {
+  const String radioText = String("[MINA-LOCAL] ") + message;
+  uint8_t plaintext[MESH_MAX_ENCRYPTED_LENGTH] = {};
+  const size_t plaintextLength = encodeTextEnvelope(
+      radioText, plaintext, sizeof(plaintext));
+  if (plaintextLength == 0) return RADIOLIB_ERR_PACKET_TOO_LONG;
+
+  MeshHeader header{};
+  header.to = MESH_BROADCAST;
+  header.from = GATEWAY_NODE_NUM;
+  do {
+    header.id = esp_random();
+  } while (header.id == 0);
+  // hop_limit=3 y hop_start=3. Al ser canal broadcast no se solicita ACK,
+  // evitando que cada nodo de la malla responda simultaneamente.
+  header.flags = static_cast<uint8_t>(3U | (3U << 5));
+  header.channel = MESH_CHANNEL_HASH;
+  header.nextHop = 0;
+  header.relayNode = static_cast<uint8_t>(GATEWAY_NODE_NUM & 0xFF);
+
+  uint8_t packet[256] = {};
+  memcpy(packet, &header, sizeof(header));
+  if (!cryptChannelPayload(header, plaintext, plaintextLength,
+                           packet + sizeof(header))) {
+    return RADIOLIB_ERR_UNKNOWN;
+  }
+
+  packetReady = false;
+  radio.clearPacketReceivedAction();
+  radio.standby();
+  const int16_t transmitState = radio.transmit(
+      packet, sizeof(header) + plaintextLength);
+  radio.setPacketReceivedAction(onRadioPacket);
+  const int16_t receiveState = radio.startReceive();
+  radioReady = receiveState == RADIOLIB_ERR_NONE;
+  packetId = header.id;
+  Serial.printf("[CHAT] TX Meshtastic %08lX (%u bytes): %d, RX: %d\n",
+                static_cast<unsigned long>(header.id),
+                static_cast<unsigned>(sizeof(header) + plaintextLength),
+                transmitState, receiveState);
+  if (transmitState != RADIOLIB_ERR_NONE) return transmitState;
+  return receiveState;
+}
+
+void pollOutgoingMessages() {
+  if (!radioReady || pendingMessageStatus.active ||
+      WiFi.status() != WL_CONNECTED) return;
+  const uint32_t now = millis();
+  if (lastQueuePoll != 0 && now - lastQueuePoll < QUEUE_POLL_MS) return;
+  lastQueuePoll = now;
+
+  JsonDocument request;
+  request["token"] = READER_TOKEN;
+  String responseBody;
+  const int status = postJson(RX01_QUEUE_ENDPOINT, request, &responseBody);
+  if (status < 200 || status >= 300) {
+    Serial.printf("[CHAT] Cola de RX-01 no disponible: HTTP %d\n", status);
+    return;
+  }
+  JsonDocument response;
+  if (deserializeJson(response, responseBody) ||
+      !response["disponible"].as<bool>()) return;
+
+  const String id = response["id"] | "";
+  String message = response["mensaje"] | "";
+  message.trim();
+  if (id.isEmpty() || message.isEmpty()) return;
+
+  if (!updateMessageStatus(id, "transmitiendo", 0)) return;
+  uint32_t packetId = 0;
+  const int16_t transmitState = transmitTextToMesh(message, packetId);
+  pendingMessageStatus.id = id;
+  pendingMessageStatus.packetId = packetId;
+  pendingMessageStatus.state = transmitState == RADIOLIB_ERR_NONE
+      ? "transmitido" : "error";
+  pendingMessageStatus.active = true;
+  lastStatusAttempt = 0;
+  if (transmitState == RADIOLIB_ERR_NONE) {
+    ++messageTxCount;
+    lastGatewayState = "Mensaje transmitido";
+  } else {
+    lastGatewayState = String("Error TX ") + transmitState;
+  }
+  renderStatus();
+}
+
 }  // namespace
 
 void setup() {
   Serial.begin(115200);
   delay(250);
   Serial.println();
-  Serial.println("[GATEWAY] RX-02 Meshtastic -> MINA-LOCAL");
+  Serial.println("[GATEWAY] RX-02 Meshtastic <-> MINA-LOCAL");
   startDisplay();
   startWifi();
   startRadio();
@@ -436,6 +739,9 @@ void loop() {
   maintainWifi();
   receiveMeshPacket();
   postPendingPosition();
+  postPendingIncomingText();
+  servicePendingMessageStatus();
+  pollOutgoingMessages();
   if (millis() - lastDisplayRefresh >= OLED_REFRESH_MS) {
     lastDisplayRefresh = millis();
     renderStatus();

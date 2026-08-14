@@ -138,6 +138,44 @@ Para devolverlo a lector normal basta flashear otra vez:
 pio run -e heltec_rx02 -t upload --upload-port COMx
 ```
 
+### Mensajeria privada con Trabajador 01
+
+RX-01 conserva dos canales separados en el portal:
+
+- los mensajes operacionales generales siguen visibles para todas las personas
+  conectadas a `MINA-LOCAL`;
+- la conversacion Meshtastic con `!f72ad896` solo es visible para una sesion de
+  supervisor o administrador.
+
+Los mensajes salientes quedan persistidos en `/mensajes_mesh.json` y esperan en
+cola hasta que el gateway RX-02 los retire. RX-02 entrega por separado los textos
+recibidos desde el T1000-E, identificados como `Trabajador 01`. La interfaz indica
+si RX-02 esta disponible y diferencia `en cola`, `transmitido`, `confirmado` y
+`recibido` sin convertir el chat privado en un aviso general.
+
+## Mapa subterraneo por niveles y profundidad
+
+El portal incluye un modelo vectorial 3D conceptual, giratorio e inspirado en
+operaciones de block caving. Representa niveles, macrobloques, galerias,
+cruceros, rampas, piques, ventilacion e infraestructura, sin reproducir ni
+afirmar que corresponde a un plano operacional de Codelco. El archivo DXF
+descargable tambien contiene geometria tridimensional real y se encuentra en
+`data/static/mina_niveles.dxf` y el visor se configura mediante
+`data/layout_mina.json`.
+
+Las cotas locales del prototipo son:
+
+- RX-01: Nivel 1, cota -250 m.
+- RX-02: Nivel 2, cota -450 m.
+- RX-03: Nivel 3, cota -650 m.
+
+La profundidad de un beacon se infiere a partir del RX que mantiene la lectura
+BLE mas estable. Por lo tanto indica nivel o sector, no una medicion altimetrica
+continua ni una posicion topografica certificada. En la prueba autonoma actual
+RX-02 esta dedicado al gateway Meshtastic y no escanea BLE; para usar los tres
+niveles simultaneamente debe volver a modo reader y otro equipo debe asumir el
+gateway Meshtastic.
+
 El T1000-E transmite actualmente una posicion cada 15 minutos y el canal limita
 la precision a 13 bits. Es suficiente para comprobar el transporte autonomo,
 pero no para validar una calle exacta; reducir el intervalo aumenta el consumo

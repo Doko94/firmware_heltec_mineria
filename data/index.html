@@ -10,10 +10,12 @@
   <link rel="stylesheet" href="/static/tag-types.css">
   <link rel="stylesheet" href="/static/hardware-note.css">
   <link rel="stylesheet" href="/static/messages.css">
+  <link rel="stylesheet" href="/static/mesh-messages.css?v=20260813-01">
   <link rel="stylesheet" href="/static/gps.css?v=20260813-02">
   <link rel="stylesheet" href="/static/supervisor-fix.css">
   <link rel="stylesheet" href="/static/groundhog-theme.css">
   <link rel="stylesheet" href="/static/contrast-cards.css?v=20260813-40">
+  <link rel="stylesheet" href="/static/subterranean-map.css?v=20260814-02">
 </head>
 <body>
   <header class="topbar">
@@ -66,28 +68,53 @@
       <div id="messageList" class="message-list"><div class="empty">No hay mensajes publicados.</div></div>
     </section>
 
+    <section class="mesh-message-module" aria-labelledby="meshMessageTitle">
+      <div class="mesh-message-head">
+        <div><span class="label">RADIO DE TERRENO · MESHTASTIC</span><h2 id="meshMessageTitle">Conversación con Trabajador 01</h2><p>Chat privado entre supervisión y el teléfono vinculado al SenseCAP T1000-E. Los avisos generales de arriba continúan visibles para todos.</p></div>
+        <span id="meshGatewayState" class="mesh-gateway-state offline">RX02 sin enlace</span>
+      </div>
+      <div id="meshLocked" class="mesh-locked">
+        <div><strong>Conversación protegida</strong><small>Inicia sesión como supervisor o administrador para leer y responder.</small></div>
+        <button id="meshLogin" class="button-primary" type="button">Ingresar para mensajería</button>
+      </div>
+      <div id="meshConversation" class="mesh-conversation" hidden>
+        <div id="meshMessageList" class="mesh-message-list" aria-live="polite"><div class="empty">Aún no hay mensajes Meshtastic.</div></div>
+        <div class="mesh-history-actions">
+          <p>Limpia solamente esta conversación guardada en RX01. Los mensajes recibidos por el T1000-E no se borran.</p>
+          <button id="meshClearHistory" type="button">Limpiar historial de la página</button>
+        </div>
+        <form id="meshMessageForm" class="mesh-compose">
+          <label for="meshMessageBody">Mensaje para Trabajador 01 · T1000-E</label>
+          <div><textarea id="meshMessageBody" maxlength="180" rows="3" lang="es-CL" spellcheck="true" autocorrect="on" autocapitalize="sentences" placeholder="Escribe un mensaje breve para enviar por LoRa…" required></textarea><button id="meshMessageSend" type="submit">Enviar por Meshtastic</button></div>
+          <p><span id="meshMessageCount">0 / 180 bytes</span><span id="meshMessageStatus" role="status" aria-live="polite"></span></p>
+        </form>
+      </div>
+    </section>
+
     <section class="rtls-module">
       <div class="rtls-head">
-        <div><span class="label">OFICINA MINERA · CONFIGURACIÓN CONCEPTUAL</span><h2>Recorrido de control de turno</h2><p>RX02 registra el ingreso en portería, RX01 confirma presencia en el punto de formación y RX03 registra la salida del personal.</p></div>
-        <a class="dxf-download" href="/static/oficina_turno.dxf" download="oficina_minera_control_turno.dxf">Descargar DXF</a>
+        <div><span class="label">MINA SUBTERRÁNEA · MODELO VECTORIAL 3D CONCEPTUAL</span><h2>Ubicación por nivel y profundidad</h2><p>Cada beacon adopta la cota del RX que confirma la señal BLE más estable. Es ubicación por sector, no una medición altimétrica continua.</p></div>
+        <a class="dxf-download" href="/static/mina_niveles.dxf" download="mina_subterranea_niveles_conceptual.dxf">Descargar DXF</a>
       </div>
       <div class="tag-explainer">
         <article><span class="tag-symbol person">P</span><div><strong>Beacon personal</strong><small>Se instala protegido en el casco, lámpara o credencial del trabajador.</small></div></article>
-        <article><span class="tag-symbol reader">R1</span><div><strong>RX01 · Interior</strong><small>Confirma presencia en el punto de formación y oficina minera.</small></div></article>
-        <article><span class="tag-symbol reader">R2</span><div><strong>RX02 / RX03 · Accesos</strong><small>Registran el ingreso por portería y la salida al terminar el turno.</small></div></article>
+        <article><span class="tag-symbol reader">R1</span><div><strong>RX01 · Cota −250 m</strong><small>Confirma presencia en la galería del Nivel 1.</small></div></article>
+        <article><span class="tag-symbol reader">R2</span><div><strong>RX02 · Cota −450 m</strong><small>Zona prevista para el Nivel 2 cuando RX02 opere como lector BLE.</small></div></article>
+        <article><span class="tag-symbol reader">R3</span><div><strong>RX03 · Cota −650 m</strong><small>Confirma presencia en la galería profunda del Nivel 3.</small></div></article>
       </div>
-      <div class="hardware-note"><strong>Configuración autónoma:</strong> los beacons vinculados a un mismo RX se ordenan automáticamente en una grilla. Toca un punto numerado para abrir su identificación; la posición representa el último sector confirmado, no una coordenada GPS.</div>
+      <div class="hardware-note"><strong>Profundidad inferida:</strong> los beacons vinculados a un mismo RX se ordenan automáticamente dentro de su nivel. Toca un punto para ver nombre, cota y profundidad. RX02 está actualmente dedicado al gateway Meshtastic; para usar los tres niveles BLE se necesita devolver RX02 a modo lector y disponer de otro gateway.</div>
       <div class="layout-actions map-toolbar" aria-label="Herramientas del mapa">
         <label for="dxfFile" class="admin-layout-control button-primary" hidden>Importar DXF</label><input id="dxfFile" type="file" accept=".dxf">
         <button id="resetView" class="button-map" type="button">Centrar mapa</button>
+        <button id="mapRotate3d" class="button-map zoom-only" type="button" aria-label="Girar vista tridimensional" title="Girar vista 3D"><svg class="zoom-icon" viewBox="0 0 32 32" aria-hidden="true"><path d="m16 3 11 6-11 6L5 9l11-6Z"></path><path d="m5 9v13l11 7 11-7V9M16 15v14"></path><path d="M8 4.5A14 14 0 0 0 2.5 12M2.5 12 2 7.5M2.5 12 7 11"></path></svg><span class="visually-hidden">Girar vista 3D</span></button>
         <button id="refresh" class="button-map zoom-only refresh-map" type="button" aria-label="Actualizar estados" title="Actualizar estados"><svg class="refresh-icon" viewBox="0 0 32 32" aria-hidden="true"><path d="M25.3 10.3A11 11 0 0 0 6 9.1"></path><path d="M6.2 4.7 6 9.4l4.7.1"></path><path d="M6.7 21.7A11 11 0 0 0 26 22.9"></path><path d="m25.8 27.3.2-4.7-4.7-.1"></path></svg><span class="visually-hidden">Actualizar estados</span></button>
         <button id="mapZoomIn" class="button-map zoom-only" type="button" aria-label="Acercar mapa" title="Acercar mapa"><svg class="zoom-icon" viewBox="0 0 32 32" aria-hidden="true"><circle cx="13.5" cy="13.5" r="8.5"></circle><path d="m20 20 7 7M9.5 13.5h8M13.5 9.5v8"></path></svg></button>
         <button id="mapZoomOut" class="button-map zoom-only" type="button" aria-label="Alejar mapa" title="Alejar mapa"><svg class="zoom-icon" viewBox="0 0 32 32" aria-hidden="true"><circle cx="13.5" cy="13.5" r="8.5"></circle><path d="m20 20 7 7M9.5 13.5h8"></path></svg></button>
       </div>
       <div class="mine-layout">
-        <svg id="mineSvg" viewBox="0 0 1000 560" role="img" aria-label="Plano conceptual de la oficina minera y el recorrido del turno"></svg>
-        <div class="map-help">Rueda o botones para zoom · arrastra para desplazarte</div>
-        <div class="depth-legend"><span>Superficie</span><i></i><span>Mayor profundidad</span></div>
+        <svg id="mineSvg" viewBox="0 0 1000 560" role="img" aria-label="Modelo vectorial tridimensional conceptual de una mina subterránea con tres niveles de profundidad"></svg>
+        <div class="map-help">Cubo: girar modelo 3D · pinza o botones para zoom · arrastra para desplazarte</div>
+        <div class="depth-legend"><span>Cota 0</span><i></i><span>Cota −650 m</span></div>
         <div class="map-status" id="layoutStatus">Cargando layout…</div>
       </div>
       <article id="tagGpsSelection" class="tag-gps-selection" hidden>
@@ -198,9 +225,10 @@
       </section>
     </section>
   </div>
-  <script src="/static/app.js?v=20260813-29"></script>
-  <script src="/static/rtls.js?v=20260813-21"></script>
+  <script src="/static/app.js?v=20260814-01"></script>
+  <script src="/static/rtls.js?v=20260814-02"></script>
   <script src="/static/messages.js?v=20260813-30"></script>
+  <script src="/static/mesh-messages.js?v=20260813-01"></script>
   <script src="/static/gps.js?v=20260813-03"></script>
 </body>
 </html>

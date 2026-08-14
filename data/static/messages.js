@@ -184,11 +184,12 @@ async function checkSupervisorSession() {
 }
 
 function setSupervisorAccessPurpose(purpose = "messages") {
-  supervisorAccessPurpose = purpose === "gps" ? "gps" : "messages";
+  supervisorAccessPurpose = purpose === "gps" ? "gps" : purpose === "mesh" ? "mesh" : "messages";
   const gpsAccess = supervisorAccessPurpose === "gps";
-  $("supervisorEyebrow").textContent = gpsAccess ? "UBICACI\u00d3N PROTEGIDA" : "ACCESO RESTRINGIDO";
-  $("supervisorTitle").textContent = gpsAccess ? "Acceso para ver trabajador por GPS" : "Panel del supervisor";
-  $("supervisorLoginSubmit").textContent = gpsAccess ? "Autorizar y ver GPS" : "Ingresar como supervisor";
+  const meshAccess = supervisorAccessPurpose === "mesh";
+  $("supervisorEyebrow").textContent = gpsAccess ? "UBICACI\u00d3N PROTEGIDA" : meshAccess ? "MENSAJER\u00cdA PROTEGIDA" : "ACCESO RESTRINGIDO";
+  $("supervisorTitle").textContent = gpsAccess ? "Acceso para ver trabajador por GPS" : meshAccess ? "Acceso a conversación Meshtastic" : "Panel del supervisor";
+  $("supervisorLoginSubmit").textContent = gpsAccess ? "Autorizar y ver GPS" : meshAccess ? "Autorizar mensajería" : "Ingresar como supervisor";
   syncMessageComposerAccess();
 }
 
@@ -201,6 +202,7 @@ function openSupervisor(purpose = "messages") {
 }
 window.openSupervisorPanel = openSupervisor;
 window.openSupervisorForGps = () => openSupervisor("gps");
+window.openSupervisorForMesh = () => openSupervisor("mesh");
 
 function closeSupervisor() { $("supervisorModal").hidden = true; }
 
@@ -249,10 +251,10 @@ $("loginForm").addEventListener("submit", async event => {
   $("loginForm").hidden = true;
   renderSupervisorMessages();
   renderAccessRole();
-  if (supervisorAccessPurpose === "gps") {
+  if (supervisorAccessPurpose === "gps" || supervisorAccessPurpose === "mesh") {
     $("messageForm").hidden = true;
     closeSupervisor();
-    window.dispatchEvent(new CustomEvent("mina:gps-access-granted"));
+    window.dispatchEvent(new CustomEvent(supervisorAccessPurpose === "gps" ? "mina:gps-access-granted" : "mina:mesh-access-granted"));
   } else {
     $("messageForm").hidden = false;
     $("messageTitle").focus();

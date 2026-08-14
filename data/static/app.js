@@ -46,7 +46,7 @@ function renderAssets() {
       <h3>${esc(item.nombre)}</h3><div class="asset-person">${esc(item.codigo_personal || item.persona)} · ${esc(item.cargo || "Personal minero")} · ${esc(item.cuadrilla || "Sin cuadrilla")}</div>
       <div class="worker-shift-state ${esc(item.estado_turno || "sin_senal")}"><strong>${esc(shiftLabels[item.estado_turno] || item.estado_turno || "Sin señal")}</strong><small>${esc(item.turno?.nombre || "Turno sin asignar")} · ${esc(item.turno?.inicio || "--:--")}–${esc(item.turno?.fin || "--:--")}</small></div>
       <div class="distance"><strong>${item.distancia == null ? "—" : esc(item.distancia)} <small>m aprox.</small></strong><span class="trend">${esc(trends[item.tendencia] || item.tendencia)}</span></div>
-      <div class="precision-line"><span class="precision-quality ${esc(precision.calidad || "sin_senal")}">${esc(qualityLabels[precision.calidad] || precision.calidad || "Sin señal")}</span><small>${precision.rssi_filtrado == null ? "Esperando muestras" : `RSSI filtrado ${esc(precision.rssi_filtrado)} dBm · ventana ${esc(precision.ventana || 0)}/5`}</small></div>
+      <div class="precision-line"><span class="precision-quality ${esc(precision.calidad || "sin_senal")}">${esc(qualityLabels[precision.calidad] || precision.calidad || "Sin señal")}</span><small>${precision.rssi_filtrado == null ? "Esperando muestras" : `RSSI filtrado ${esc(precision.rssi_filtrado)} dBm · ventana ${esc(precision.ventana || 0)}/${esc(precision.objetivo_ventana || 7)}`}</small></div>
       <div class="asset-history-head"><div><span>Historial de cambios del TAG</span><small>Veces que ingresó a cada estado</small></div>${canManageHistory ? `<button class="clear-asset-history" data-beacon-id="${esc(item.id)}" type="button">Limpiar historial</button>` : ""}</div>
       <div class="asset-counts" aria-label="Historial de estados de ${esc(item.nombre)}">
         <span class="danger"><i></i><small>Peligro</small><strong>${esc(counters.peligro || 0)}</strong></span>
@@ -248,6 +248,7 @@ fetch("/api/reloj", {
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({ epoch: Date.now() })
 }).catch(console.error).finally(refreshLocalState);
-setInterval(refreshLocalState, 2000);
+// Refleja una nueva lectura BLE en la pagina con hasta un segundo de espera.
+setInterval(refreshLocalState, 1000);
 loadReports();
 setInterval(loadReports, 10000);
