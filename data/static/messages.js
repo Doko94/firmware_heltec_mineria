@@ -305,10 +305,22 @@ async function confirmMessage(id) {
 }
 
 async function deleteMessage(id) {
-  if (!confirm("¿Eliminar definitivamente este mensaje?")) return;
-  const response = await fetch(`/api/mensajes/${encodeURIComponent(id)}`, { method: "DELETE" });
-  if (!response.ok) { alert(await response.text()); return; }
-  await loadSupervisorMessages();
+  const accepted = await window.requestMinaConfirmation({
+    title: "¿Eliminar este mensaje?",
+    message: "El mensaje operacional dejará de estar visible en los portales MINA-LOCAL.",
+    confirmText: "Sí, eliminar mensaje"
+  });
+  if (!accepted) return;
+  const button = [...document.querySelectorAll(".delete-message")].find(item => item.dataset.messageId === String(id));
+  setButtonLoading(button, true, "Eliminando…");
+  try {
+    const response = await fetch(`/api/mensajes/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!response.ok) throw new Error(await response.text());
+    await loadSupervisorMessages();
+  } catch (error) {
+    setButtonLoading(button, false);
+    alert(error.message || "No fue posible eliminar el mensaje.");
+  }
 }
 
 $("logoutSupervisor").addEventListener("click", async () => {
@@ -413,16 +425,49 @@ $("adminComposeMessage").addEventListener("click", () => {
 });
 
 $("clearMessages").addEventListener("click", async () => {
-  if (!confirm("¿Eliminar definitivamente todos los mensajes del supervisor?")) return;
-  const response = await fetch("/api/mensajes", { method: "DELETE" });
-  if (response.ok) { $("adminStatus").textContent = "Mensajes del supervisor eliminados"; await loadSupervisorMessages(); }
-  else $("adminStatus").textContent = await response.text();
+  const accepted = await window.requestMinaConfirmation({
+    title: "¿Limpiar todos los mensajes?",
+    message: "Se eliminarán todos los mensajes operacionales guardados en MINA-LOCAL.",
+    confirmText: "Sí, limpiar mensajes"
+  });
+  if (!accepted) return;
+  const button = $("clearMessages");
+  setButtonLoading(button, true, "Eliminando…");
+  $("adminStatus").textContent = "Eliminando mensajes…";
+  try {
+    const response = await fetch("/api/mensajes", { method: "DELETE" });
+    if (!response.ok) throw new Error(await response.text());
+    const result = await response.json();
+    $("adminStatus").textContent = `${result.eliminados || 0} mensaje(s) eliminado(s) correctamente`;
+    await loadSupervisorMessages();
+  } catch (error) {
+    $("adminStatus").textContent = error.message || "No fue posible eliminar los mensajes";
+  } finally {
+    setButtonLoading(button, false);
+  }
 });
 
 $("clearEvents").addEventListener("click", async () => {
-  if (!confirm("¿Eliminar definitivamente todo el historial de proximidad?")) return;
-  const response = await fetch("/api/historial-proximidad", { method: "DELETE" });
-  $("adminStatus").textContent = response.ok ? "Historial de proximidad eliminado" : await response.text();
+  const accepted = await window.requestMinaConfirmation({
+    title: "¿Limpiar todo el historial?",
+    message: "Se borrarán los eventos y contadores de proximidad de todos los TAG.",
+    confirmText: "Sí, limpiar historial"
+  });
+  if (!accepted) return;
+  const button = $("clearEvents");
+  setButtonLoading(button, true, "Eliminando…");
+  $("adminStatus").textContent = "Eliminando historial…";
+  try {
+    const response = await fetch("/api/historial-proximidad", { method: "DELETE" });
+    if (!response.ok) throw new Error(await response.text());
+    const result = await response.json();
+    $("adminStatus").textContent = `${result.eliminados || 0} evento(s) eliminado(s) correctamente`;
+    await Promise.all([fetchState(), loadReports()]);
+  } catch (error) {
+    $("adminStatus").textContent = error.message || "No fue posible eliminar el historial";
+  } finally {
+    setButtonLoading(button, false);
+  }
 });
 
 loadSupervisorMessages();

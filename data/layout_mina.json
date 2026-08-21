@@ -126,11 +126,6 @@
     {"a":[470,-15,-450],"b":[610,-20,-550],"capa":"RAMPA_ACCESO","nivel":"CONEXION"},
     {"a":[610,-20,-550],"b":[720,-60,-650],"capa":"RAMPA_ACCESO","nivel":"CONEXION"},
 
-    {"a":[500,160,0],"b":[500,160,-690],"capa":"PIQUE_PRINCIPAL","nivel":"CONEXION"},
-    {"a":[875,165,-55],"b":[875,165,-690],"capa":"VENTILACION_INYECCION","nivel":"CONEXION"},
-    {"a":[915,145,-55],"b":[915,145,-690],"capa":"VENTILACION_EXTRACCION","nivel":"CONEXION"},
-    {"a":[960,-160,-35],"b":[930,-130,-650],"capa":"CHIMENEA_ESCAPE","nivel":"CONEXION"},
-
     {"a":[115,80,-250],"b":[190,80,-250],"capa":"REFUGIO","nivel":"N1"},
     {"a":[190,80,-250],"b":[190,120,-250],"capa":"REFUGIO","nivel":"N1"},
     {"a":[190,120,-250],"b":[115,120,-250],"capa":"REFUGIO","nivel":"N1"},
@@ -157,13 +152,6 @@
     {"a":[925,75,-650],"b":[925,120,-650],"capa":"BOMBEO","nivel":"N3"},
     {"a":[925,120,-650],"b":[840,120,-650],"capa":"BOMBEO","nivel":"N3"},
     {"a":[840,120,-650],"b":[840,75,-650],"capa":"BOMBEO","nivel":"N3"},
-
-    {"a":[180,0,-235],"b":[180,0,-285],"capa":"TRASPASO_MINERAL","nivel":"N1"},
-    {"a":[300,5,-235],"b":[300,5,-300],"capa":"TRASPASO_MINERAL","nivel":"N1"},
-    {"a":[405,0,-435],"b":[405,0,-500],"capa":"TRASPASO_MINERAL","nivel":"N2"},
-    {"a":[540,5,-435],"b":[540,5,-500],"capa":"TRASPASO_MINERAL","nivel":"N2"},
-    {"a":[625,0,-635],"b":[625,0,-705],"capa":"TRASPASO_MINERAL","nivel":"N3"},
-    {"a":[765,5,-635],"b":[765,5,-705],"capa":"TRASPASO_MINERAL","nivel":"N3"},
 
     {"a":[105,52,-250],"b":[270,52,-250],"capa":"GALERIA_VENTILACION","nivel":"N1"},
     {"a":[270,52,-250],"b":[430,52,-250],"capa":"GALERIA_VENTILACION","nivel":"N1"},
@@ -199,9 +187,6 @@
     {"id":"ENLACE CARACOL N1","x":400,"y":120,"z":-250,"nivel":"N1"},
     {"id":"ENLACE CARACOL N2","x":670,"y":120,"z":-450,"nivel":"N2"},
     {"id":"ENLACE CARACOL N3","x":625,"y":-145,"z":-650,"nivel":"N3"},
-    {"id":"PIQUE PRINCIPAL","x":500,"y":175,"z":-120,"nivel":"CONEXION"},
-    {"id":"INY. AIRE","x":875,"y":185,"z":-170,"nivel":"CONEXION"},
-    {"id":"EXT. AIRE","x":915,"y":165,"z":-250,"nivel":"CONEXION"},
     {"id":"REFUGIO","x":150,"y":115,"z":-250,"nivel":"N1"},
     {"id":"TALLER LHD","x":385,"y":115,"z":-250,"nivel":"N1"},
     {"id":"VENTILACION AUX.","x":270,"y":55,"z":-250,"nivel":"N1"},

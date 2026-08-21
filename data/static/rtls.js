@@ -7,6 +7,7 @@ let mapDrag = null;
 const mapPointers = new Map();
 let pinchState = null;
 let selectedTagId = null;
+let searchedTagId = null;
 let mapYaw = -35 * Math.PI / 180;
 let selectedMineLevel = "ALL";
 let selectedMineArea = "";
@@ -412,6 +413,37 @@ function groupedTagPlacements(tags, project) {
     const centerY = (minScreenY + maxScreenY) / 2;
     const readerPoint = reader ? project([reader.x, reader.y, reader.z]) : [centerX, centerY];
 
+    // En grupos pequenos importa mas la legibilidad que la coordenada
+    // conceptual dentro del poligono. Se forman filas centradas sobre el RX y
+    // se deja un corredor libre entre el TAG inferior y el circulo del reader.
+    // Asi un unico beacon nunca vuelve a tapar el punto RX.
+    if (reader && count <= 12) {
+      const compactColumns = Math.min(5, count);
+      const compactRows = Math.ceil(count / compactColumns);
+      const horizontalGap = selectedMineLevel === "ALL" ? 13 : 16;
+      const verticalGap = selectedMineLevel === "ALL" ? 13 : 16;
+      readerTags.forEach((tag, index) => {
+        const row = Math.floor(index / compactColumns);
+        const rowStart = row * compactColumns;
+        const rowCount = Math.min(compactColumns, count - rowStart);
+        const column = index - rowStart;
+        worldPoints[index] = null;
+        projectedTags[index] = [
+          readerPoint[0] + (column - (rowCount - 1) / 2) * horizontalGap,
+          readerPoint[1] - 25 - (compactRows - 1 - row) * verticalGap
+        ];
+      });
+    }
+
+    const placedXs = projectedTags.map(point => point[0]);
+    const placedYs = projectedTags.map(point => point[1]);
+    const placedMinX = Math.min(...placedXs), placedMaxX = Math.max(...placedXs);
+    const placedMinY = Math.min(...placedYs), placedMaxY = Math.max(...placedYs);
+    const visualCenterX = (placedMinX + placedMaxX) / 2;
+    const visualCenterY = (placedMinY + placedMaxY) / 2;
+    const visualWidth = Math.max(32, placedMaxX - placedMinX + 18);
+    const visualHeight = Math.max(26, placedMaxY - placedMinY + 18);
+
     readerTags.forEach((tag, index) => {
       const [x, y] = projectedTags[index];
       positions.set(tag.id, {
@@ -428,12 +460,12 @@ function groupedTagPlacements(tags, project) {
     clusters.push({
       readerId,
       count,
-      x: centerX - clusterWidth / 2,
-      y: centerY - clusterHeight / 2,
-      width: clusterWidth,
-      height: clusterHeight,
-      centerX,
-      centerY,
+      x: count <= 12 ? visualCenterX - visualWidth / 2 : centerX - clusterWidth / 2,
+      y: count <= 12 ? visualCenterY - visualHeight / 2 : centerY - clusterHeight / 2,
+      width: count <= 12 ? visualWidth : clusterWidth,
+      height: count <= 12 ? visualHeight : clusterHeight,
+      centerX: count <= 12 ? visualCenterX : centerX,
+      centerY: count <= 12 ? visualCenterY : centerY,
       readerX: readerPoint[0],
       readerY: readerPoint[1]
     });
@@ -508,8 +540,108 @@ function clearMapTagSelection() {
   window.dispatchEvent(new CustomEvent("mina:tag-selected", {detail: {tagId: null}}));
 }
 
+function normalizeBeaconSearch(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function beaconSearchFields(tag) {
+  return [tag.id, tag.nombre, tag.persona, tag.codigo_personal, tag.cargo]
+    .filter(Boolean)
+    .map(normalizeBeaconSearch);
+}
+
+function populateBeaconSearchOptions() {
+  const options = $("beaconSearchOptions");
+  if (!options) return;
+  options.replaceChildren();
+  [...(state.beacons || [])]
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)))
+    .forEach(tag => {
+      const option = document.createElement("option");
+      option.value = tag.id;
+      option.label = `${tag.nombre || "Trabajador sin nombre"}${tag.codigo_personal ? ` · ${tag.codigo_personal}` : ""}`;
+      options.appendChild(option);
+    });
+}
+
+function setBeaconSearchStatus(message, tone = "") {
+  const status = $("beaconSearchStatus");
+  if (!status) return;
+  status.textContent = message;
+  status.className = tone;
+}
+
+function findBeaconForSearch(query) {
+  const needle = normalizeBeaconSearch(query);
+  if (!needle) return null;
+  const candidates = (state.beacons || []).map(tag => ({tag, fields: beaconSearchFields(tag)}));
+  return candidates.find(candidate => candidate.fields.some(field => field === needle))?.tag
+    || candidates.find(candidate => candidate.fields.some(field => field.startsWith(needle)))?.tag
+    || candidates.find(candidate => candidate.fields.some(field => field.includes(needle)))?.tag
+    || null;
+}
+
+function focusBeaconFromSearch(query) {
+  const tag = findBeaconForSearch(query);
+  if (!tag) {
+    setBeaconSearchStatus(`No se encontró “${String(query || "").trim()}”. Revisa el TAG o el nombre.`, "error");
+    return;
+  }
+  if (!Array.isArray(tag.coordenadas) || tag.coordenadas.length < 3) {
+    searchedTagId = tag.id;
+    $("beaconSearchClear").hidden = false;
+    setBeaconSearchStatus(`${tag.id} · ${tag.nombre}: aún no tiene una posición asociada al plano.`, "error");
+    return;
+  }
+
+  const level = readerLevel(tag.reader_id);
+  searchedTagId = tag.id;
+  selectedTagId = tag.id;
+  selectedMineLevel = mineLevelDepths[level] ? level : "ALL";
+  selectedMineArea = "";
+  selectedMineAreaLabel = `${tag.id} · ${tag.nombre}`;
+  navigationBoundsCache = null;
+  const areaSelect = $("mineAreaSelect");
+  if (areaSelect) areaSelect.value = "";
+  const input = $("beaconSearchInput");
+  if (input) input.value = tag.id;
+  $("beaconSearchClear").hidden = false;
+  updateMineLevelButtons();
+  renderMine();
+
+  const svg = $("mineSvg");
+  const group = [...svg.querySelectorAll(".tag-node")].find(node => node.dataset.tagId === tag.id);
+  const marker = group?.querySelector(".tag-marker");
+  if (group && marker) {
+    focusProjectedPoints([[Number(marker.getAttribute("cx")), Number(marker.getAttribute("cy"))]], 150);
+    selectMapTag(svg, group, tag.id);
+  }
+  const signalText = tag.estado === "sin_senal"
+    ? "sin señal actual; se muestra su último sector confirmado"
+    : `identificado por ${tag.reader_id || "un RX"}`;
+  setBeaconSearchStatus(`${tag.id} · ${tag.nombre} · ${depthText(tag.reader_id)} · ${signalText}.`, tag.estado === "sin_senal" ? "warning" : "success");
+}
+
+function clearBeaconSearch() {
+  const previous = searchedTagId;
+  searchedTagId = null;
+  selectedMineAreaLabel = "";
+  const input = $("beaconSearchInput");
+  if (input) input.value = "";
+  $("beaconSearchClear").hidden = true;
+  if (selectedTagId === previous) clearMapTagSelection();
+  renderMine();
+  setBeaconSearchStatus("Busca por código TAG o por nombre para centrarlo en su nivel.");
+}
+
 function renderMine() {
   if (!mineLayout) return;
+  populateBeaconSearchOptions();
   const svg = $("mineSvg");
   const project = projector(mineLayout);
   svg.replaceChildren();
@@ -555,7 +687,7 @@ function renderMine() {
     svg.appendChild(group);
   }
   const tags = state.beacons
-    .filter(item => Array.isArray(item.coordenadas) && item.estado !== "sin_senal")
+    .filter(item => Array.isArray(item.coordenadas) && (item.estado !== "sin_senal" || searchedTagId === item.id))
     .filter(item => selectedMineLevel === "ALL" || readerLevel(item.reader_id) === selectedMineLevel)
     .sort((a, b) => String(a.id).localeCompare(String(b.id)));
   const groupedPlacements = groupedTagPlacements(tags, project);
@@ -571,7 +703,7 @@ function renderMine() {
     const pendingMessage = window.pendingTagAlerts?.get(tag.id) || null;
     const tagDepth = depthText(tag.reader_id);
     const pendingText = pendingMessage ? `, mensaje pendiente: ${pendingMessage.titulo}` : "";
-    const group = svgElement("g", {class: `tag-node ${tag.estado} ${placement?.clase || ""}${placement?.overviewAggregate ? " overview-aggregate" : ""}${pendingMessage ? " has-pending-message" : ""}${tag.gps_asociado ? " has-gps" : ""}${selectedTagId === tag.id ? " selected" : ""}`, tabindex: "0", role: "button", "data-tag-id": tag.id, "aria-label": `${tag.id}, ${tag.nombre}, ${placement?.estado || labels[tag.estado] || tag.estado}, ${tagDepth}${tag.gps_asociado ? ", con geotracker GPS" : ""}${pendingText}`});
+    const group = svgElement("g", {class: `tag-node ${tag.estado} ${placement?.clase || ""}${placement?.overviewAggregate ? " overview-aggregate" : ""}${pendingMessage ? " has-pending-message" : ""}${tag.gps_asociado ? " has-gps" : ""}${selectedTagId === tag.id ? " selected" : ""}${searchedTagId === tag.id ? " search-match" : ""}`, tabindex: "0", role: "button", "data-tag-id": tag.id, "aria-label": `${tag.id}, ${tag.nombre}, ${placement?.estado || labels[tag.estado] || tag.estado}, ${tagDepth}${tag.gps_asociado ? ", con geotracker GPS" : ""}${pendingText}`});
     const tooltip = svgElement("title");
     tooltip.textContent = `${tag.id} · ${tag.nombre}\n${tag.codigo_personal || tag.persona} · ${tag.cargo || tag.tipo}\nSector: ${placement?.estado || tag.estado_turno || labels[tag.estado] || tag.estado}\nProfundidad estimada: ${tagDepth}\nDistancia al RX: ${tag.distancia == null ? "sin datos" : `${tag.distancia} m`}\nÚltimo reader: ${tag.reader_nombre || "sin reader"}`;
     group.appendChild(tooltip);
@@ -580,6 +712,10 @@ function renderMine() {
     const badgeOffset = markerRadius + 3.5;
     const auxiliaryRadius = 3.2;
     group.appendChild(svgElement("circle", {cx: x, cy: y, r: 15, class: "tag-hit-area"}));
+    if (searchedTagId === tag.id) {
+      group.appendChild(svgElement("circle", {cx: x, cy: y, r: markerRadius + 7, class: "tag-search-ring"}));
+      group.appendChild(svgElement("circle", {cx: x, cy: y, r: markerRadius + 13, class: "tag-search-ring outer"}));
+    }
     group.appendChild(svgElement("circle", {cx: x, cy: y, r: markerRadius, class: "tag-marker", style: `fill:${color}`}));
     drawText(group, x, y + 2.2, tagNumber(tag), "tag-marker-number");
     group.appendChild(svgElement("circle", {cx: x + badgeOffset, cy: y - badgeOffset, r: auxiliaryRadius, class: "tag-kind-marker"}));
@@ -835,6 +971,20 @@ $("mapRotateLeft").addEventListener("click", () => rotateMap(-1));
 $("mapRotateRight").addEventListener("click", () => rotateMap(1));
 document.querySelectorAll("[data-mine-level]").forEach(button => button.addEventListener("click", () => selectMineLevel(button.dataset.mineLevel)));
 $("mineAreaSelect").addEventListener("change", event => focusMineArea(event.target.value));
+$("beaconSearchForm").addEventListener("submit", event => {
+  event.preventDefault();
+  const query = $("beaconSearchInput").value.trim();
+  if (!query) {
+    setBeaconSearchStatus("Ingresa un código TAG o el nombre del trabajador.", "error");
+    $("beaconSearchInput").focus();
+    return;
+  }
+  focusBeaconFromSearch(query);
+});
+$("beaconSearchClear").addEventListener("click", clearBeaconSearch);
+$("beaconSearchInput").addEventListener("input", event => {
+  if (!event.currentTarget.value.trim() && searchedTagId) clearBeaconSearch();
+});
 
 $("mineSvg").addEventListener("wheel", event => {
   event.preventDefault();

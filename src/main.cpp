@@ -75,6 +75,12 @@ constexpr uint8_t AP_CHANNEL = 6;
 constexpr char TARGET_UUID[] = "E2C56DB5DFFB48D2B060D0F5A71096E0";
 constexpr char SUPERVISOR_PIN[] = "123456";
 constexpr char ADMIN_PIN[] = "12345";
+// Todos los portales MINA-LOCAL comparten esta credencial de sesion. El PIN
+// nunca se guarda en el navegador: despues de validarlo se entrega una cookie
+// HttpOnly que sigue siendo valida si el telefono cambia de RX durante el
+// roaming entre puntos de acceso con la misma IP.
+constexpr char ADMIN_SESSION_TOKEN[] = "mina-admin-v1-8f34c2d7";
+constexpr char ADMIN_SESSION_COOKIE_NAME[] = "mina_admin";
 constexpr uint8_t DNS_PORT = 53;
 constexpr uint32_t TAG_TIMEOUT_MS = 8000;
 constexpr uint32_t STATE_REFRESH_MS = 250;
@@ -112,6 +118,15 @@ constexpr char GPS_NODE_ID[] = "!f72ad896";
 constexpr uint32_t GPS_NODE_NUM = 4146780310UL;
 constexpr char GPS_BEACON_ID[] = "TAG-001";
 constexpr uint32_t LORA_TX_INTERVAL_MS = 1200;
+constexpr uint16_t LORA_PORTAL_SYNC_MAGIC = 0x5359;
+constexpr uint8_t LORA_PORTAL_SYNC_VERSION = 1;
+constexpr size_t LORA_PORTAL_SYNC_CHUNK_SIZE = 180;
+constexpr size_t LORA_PORTAL_SYNC_MAX_CHUNKS = 6;
+constexpr size_t LORA_PORTAL_SYNC_QUEUE_SIZE = 48;
+constexpr uint8_t LORA_PORTAL_SYNC_REPEATS = 2;
+constexpr uint32_t LORA_PORTAL_SYNC_TX_MS = 480;
+constexpr uint32_t LORA_PORTAL_SYNC_ASSEMBLY_TIMEOUT_MS = 15000;
+constexpr uint32_t LORA_GATEWAY_PRESENCE_SYNC_MS = 5000;
 constexpr float LORA_FREQUENCY_MHZ = 915.0F;
 constexpr float LORA_BANDWIDTH_KHZ = 125.0F;
 constexpr uint8_t LORA_SPREADING_FACTOR = 7;
@@ -249,6 +264,22 @@ struct GpsTrackerState {
   size_t pointCount = 0;
 };
 
+struct PortalSyncJob {
+  bool used = false;
+  uint32_t key = 0;
+  String payload;
+  uint8_t chunkIndex = 0;
+  uint8_t repetitionsRemaining = 0;
+};
+
+struct PortalSyncAssembly {
+  uint32_t key = 0;
+  uint8_t chunkCount = 0;
+  uint8_t receivedMask = 0;
+  uint32_t startedAt = 0;
+  String chunks[LORA_PORTAL_SYNC_MAX_CHUNKS];
+};
+
 TagState tags[] = {
     {"TAG-001", "Trabajador 01 - Supervisor", "Beacon personal + geotracker", "persona", "EMP-001",
      "Beacon en casco o credencial + SenseCAP T1000-E", 0, 0, "Supervisor de terreno", "Supervision", "Turno dia", "08:00", "20:00"},
@@ -290,12 +321,56 @@ bool readerPortalActive[READER_COUNT] = {false, false, false};
 uint32_t portalElectionStartedAt = 0;
 uint32_t preferredPortalStableSince = 0;
 uint32_t meshGatewayLastSeen = 0;
+uint32_t meshGatewayDirectLastSeen = 0;
+PortalSyncJob portalSyncQueue[LORA_PORTAL_SYNC_QUEUE_SIZE];
+size_t portalSyncQueueHead = 0;
+size_t portalSyncQueueCount = 0;
+PortalSyncAssembly portalSyncAssemblies[READER_COUNT];
+uint32_t completedPortalSyncKey[READER_COUNT] = {0, 0, 0};
+uint32_t lastPortalSyncTx = 0;
+uint32_t lastGatewayPresenceSync = 0;
+
+bool requestHasAdminCookie() {
+  if (!server.hasHeader("Cookie")) return false;
+  const String cookies = server.header("Cookie");
+  const String key = String(ADMIN_SESSION_COOKIE_NAME) + "=";
+  int cursor = 0;
+  while (cursor < static_cast<int>(cookies.length())) {
+    int end = cookies.indexOf(';', cursor);
+    if (end < 0) end = cookies.length();
+    String entry = cookies.substring(cursor, end);
+    entry.trim();
+    if (entry.startsWith(key) && entry.substring(key.length()) == ADMIN_SESSION_TOKEN) {
+      return true;
+    }
+    cursor = end + 1;
+  }
+  return false;
+}
+
+bool adminRequestAuthorized() {
+  return adminAuthenticated || requestHasAdminCookie();
+}
+
+void setAdminSessionCookie(bool enabled) {
+  String cookie = String(ADMIN_SESSION_COOKIE_NAME) + "=";
+  if (enabled) cookie += ADMIN_SESSION_TOKEN;
+  cookie += "; Path=/; SameSite=Lax; HttpOnly";
+  cookie += enabled ? "; Max-Age=28800" : "; Max-Age=0";
+  server.sendHeader("Set-Cookie", cookie);
+}
 
 void renderOledStatus();
+void queueSupervisorMessageSync(const SupervisorMessage& message);
+void queueSupervisorDeleteSync(const String& id);
+void queueSupervisorClearSync();
+void queueMeshMessageSync(const MeshMessage& message);
+void queueMeshClearSync();
+void queueGpsPointSync(const GpsPoint& point);
 
 String authenticatedOperatorName() {
   if (!supervisorName.isEmpty()) return supervisorName;
-  if (adminAuthenticated && !adminName.isEmpty()) return adminName;
+  if (adminRequestAuthorized() && !adminName.isEmpty()) return adminName;
   return "Administrador";
 }
 
@@ -790,7 +865,7 @@ int findMeshMessage(const String& id) {
 }
 
 bool meshConversationAuthorized() {
-  return adminAuthenticated || !supervisorName.isEmpty();
+  return adminRequestAuthorized() || !supervisorName.isEmpty();
 }
 
 bool validGatewayBody(JsonDocument& body) {
@@ -798,6 +873,7 @@ bool validGatewayBody(JsonDocument& body) {
   const String token = body["token"] | "";
   if (token == READER_TOKEN) {
     meshGatewayLastSeen = millis();
+    meshGatewayDirectLastSeen = meshGatewayLastSeen;
     return true;
   }
   server.send(403, "text/plain; charset=utf-8", "Token de gateway invalido");
@@ -851,6 +927,7 @@ void publishMeshMessage() {
   message.timestamp = moment;
   message.updatedAt = moment;
   saveMeshMessages();
+  queueMeshMessageSync(message);
   JsonDocument response;
   response["guardado"] = true;
   response["gateway_disponible"] = meshGatewayLastSeen != 0 && millis() - meshGatewayLastSeen <= 12000;
@@ -885,6 +962,10 @@ void clearMeshMessageHistory() {
   }
   meshMessageCount = retained;
   saveMeshMessages();
+  queueMeshClearSync();
+  for (size_t index = 0; index < meshMessageCount; ++index) {
+    if (meshMessages[index].used) queueMeshMessageSync(meshMessages[index]);
+  }
 
   JsonDocument response;
   response["eliminados"] = removed;
@@ -932,6 +1013,7 @@ void updateMeshMessageFromGateway() {
   message.packetId = body["packet_id"] | message.packetId;
   message.updatedAt = epochNow();
   saveMeshMessages();
+  queueMeshMessageSync(message);
   JsonDocument response;
   response["actualizado"] = true;
   appendMeshMessageJson(response["mensaje"].to<JsonObject>(), message);
@@ -977,6 +1059,7 @@ void receiveMeshMessageFromGateway() {
   message.rssi = body["rssi"] | 0;
   message.snr = body["snr"] | 0.0F;
   saveMeshMessages();
+  queueMeshMessageSync(message);
   JsonDocument response;
   response["recibido"] = true;
   response["duplicado"] = false;
@@ -1062,7 +1145,7 @@ void loadHistory() {
 }
 
 bool gpsAccessAuthorized() {
-  return adminAuthenticated || !supervisorName.isEmpty();
+  return adminRequestAuthorized() || !supervisorName.isEmpty();
 }
 
 bool readGpsPoint(JsonObject source, GpsPoint& point) {
@@ -1220,6 +1303,7 @@ void receiveGpsTrackerUpdate() {
   }
   prependGpsPoint(point);
   saveGpsTracker();
+  queueGpsPointSync(point);
   JsonDocument response;
   response["actualizado"] = true;
   response["node_id"] = gpsTracker.nodeId;
@@ -1526,7 +1610,7 @@ int findMessage(const String& id) {
 }
 
 void publishMessage() {
-  if (supervisorName.isEmpty() && !adminAuthenticated) {
+  if (supervisorName.isEmpty() && !adminRequestAuthorized()) {
     server.send(401, "text/plain; charset=utf-8", "Sesión de supervisor o administrador requerida");
     return;
   }
@@ -1554,7 +1638,8 @@ void publishMessage() {
   SupervisorMessage& message = messages[0];
   message.used = true;
   const uint64_t messageMoment = epochNow();
-  message.id = String(messageMoment != 0 ? messageMoment : millis()) + "-msg";
+  message.id = String(messageMoment != 0 ? messageMoment : millis()) + "-" +
+               String(READER_ID) + "-msg";
   message.target = target;
   message.level = level;
   message.title = title;
@@ -1565,6 +1650,7 @@ void publishMessage() {
   message.confirmedBy = "";
   message.confirmedAt = 0;
   saveMessages();
+  queueSupervisorMessageSync(message);
   JsonDocument response;
   JsonArray array = response.to<JsonArray>();
   appendMessageJson(array, message);
@@ -1583,7 +1669,7 @@ void handleDynamicApi() {
       return;
     }
     if (confirm && server.method() == HTTP_POST) {
-      if (supervisorName.isEmpty() && !adminAuthenticated) {
+      if (supervisorName.isEmpty() && !adminRequestAuthorized()) {
         server.send(401, "text/plain; charset=utf-8", "Sesión de supervisor o administrador requerida");
         return;
       }
@@ -1591,6 +1677,7 @@ void handleDynamicApi() {
       messages[index].confirmedAt = epochNow();
       messages[index].active = false;
       saveMessages();
+      queueSupervisorMessageSync(messages[index]);
       JsonDocument response;
       JsonArray array = response.to<JsonArray>();
       appendMessageJson(array, messages[index]);
@@ -1598,19 +1685,20 @@ void handleDynamicApi() {
       return;
     }
     if (server.method() == HTTP_DELETE) {
-      if (!adminAuthenticated) {
+      if (!adminRequestAuthorized()) {
         server.send(403, "text/plain; charset=utf-8", "Solo el administrador puede eliminar mensajes");
         return;
       }
       for (size_t position = index; position + 1 < messageCount; ++position) messages[position] = messages[position + 1];
       if (messageCount > 0) --messageCount;
       saveMessages();
+      queueSupervisorDeleteSync(tail);
       JsonDocument response; response["eliminado"] = tail; sendJson(200, response);
       return;
     }
   }
   if (uri.startsWith("/api/historial-proximidad/") && server.method() == HTTP_DELETE) {
-    if (!adminAuthenticated) {
+    if (!adminRequestAuthorized()) {
       server.send(403, "text/plain; charset=utf-8", "Se requiere una sesión de administrador");
       return;
     }
@@ -1662,7 +1750,7 @@ void redirectCaptivePortal() {
 }
 
 void serveMutableBackup(const char* path) {
-  if (!adminAuthenticated) {
+  if (!adminRequestAuthorized()) {
     server.send(403, "text/plain; charset=utf-8", "Se requiere una sesion de administrador");
     return;
   }
@@ -1870,6 +1958,7 @@ void configureWeb() {
   server.on("/api/respaldo/historial", HTTP_GET, []() { serveMutableBackup("/historial.json"); });
   server.on("/api/respaldo/gps", HTTP_GET, []() { serveMutableBackup("/gps_tracker.json"); });
   server.on("/api/respaldo/mensajes", HTTP_GET, []() { serveMutableBackup("/mensajes.json"); });
+  server.on("/api/respaldo/mesh", HTTP_GET, []() { serveMutableBackup("/mensajes_mesh.json"); });
   server.on("/api/coordinacion", HTTP_GET, []() {
     JsonDocument response;
     response["coordinador_preferido"] = "RX-01";
@@ -1906,8 +1995,9 @@ void configureWeb() {
   server.on("/api/mensajes", HTTP_GET, sendMessages);
   server.on("/api/mensajes", HTTP_POST, publishMessage);
   server.on("/api/mensajes", HTTP_DELETE, []() {
-    if (!adminAuthenticated) { server.send(403, "text/plain; charset=utf-8", "Se requiere una sesión de administrador"); return; }
+    if (!adminRequestAuthorized()) { server.send(403, "text/plain; charset=utf-8", "Se requiere una sesión de administrador"); return; }
     const size_t removed = messageCount; messageCount = 0; saveMessages();
+    queueSupervisorClearSync();
     JsonDocument response; response["eliminados"] = removed; sendJson(200, response);
   });
   server.on("/api/meshtastic/mensajes", HTTP_GET, sendMeshMessages);
@@ -1917,7 +2007,7 @@ void configureWeb() {
   server.on("/api/meshtastic/estado", HTTP_POST, updateMeshMessageFromGateway);
   server.on("/api/meshtastic/recibir", HTTP_POST, receiveMeshMessageFromGateway);
   server.on("/api/historial-proximidad", HTTP_DELETE, []() {
-    if (!adminAuthenticated) { server.send(403, "text/plain; charset=utf-8", "Se requiere una sesión de administrador"); return; }
+    if (!adminRequestAuthorized()) { server.send(403, "text/plain; charset=utf-8", "Se requiere una sesión de administrador"); return; }
     const size_t removed = eventCount; eventCount = 0;
     for (TagState& tag : tags) {
       tag.dangerCount = tag.warningCount = tag.nearCount = tag.safeCount = tag.offlineCount = 0;
@@ -1939,17 +2029,17 @@ void configureWeb() {
     supervisorName = ""; JsonDocument response; response["autenticado"] = false; sendJson(200, response);
   });
   server.on("/api/administrador/estado", HTTP_GET, []() {
-    JsonDocument response; response["autenticado"] = adminAuthenticated; response["rol"] = "administrador"; response["nombre"] = adminName; sendJson(200, response);
+    JsonDocument response; response["autenticado"] = adminRequestAuthorized(); response["rol"] = "administrador"; response["nombre"] = adminName; sendJson(200, response);
   });
   server.on("/api/administrador/login", HTTP_POST, []() {
     JsonDocument body; if (!parseJsonBody(body)) return;
     const String pin = body["pin"] | ""; String name = body["nombre"] | ""; name.trim();
     if (pin != ADMIN_PIN) { server.send(401, "text/plain; charset=utf-8", "PIN de administrador incorrecto"); return; }
     if (name.isEmpty() || name.length() > 40) { server.send(400, "text/plain; charset=utf-8", "Nombre de administrador inválido"); return; }
-    adminAuthenticated = true; adminName = name; JsonDocument response; response["autenticado"] = true; response["rol"] = "administrador"; response["nombre"] = name; sendJson(200, response);
+    adminAuthenticated = true; adminName = name; setAdminSessionCookie(true); JsonDocument response; response["autenticado"] = true; response["rol"] = "administrador"; response["nombre"] = name; sendJson(200, response);
   });
   server.on("/api/administrador/logout", HTTP_POST, []() {
-    adminAuthenticated = false; adminName = ""; JsonDocument response; response["autenticado"] = false; sendJson(200, response);
+    adminAuthenticated = false; adminName = ""; setAdminSessionCookie(false); JsonDocument response; response["autenticado"] = false; sendJson(200, response);
   });
   // Los recursos llevan version en la URL. Cachearlos evita volver a transferir
   // cerca de 180 KB cada vez que iOS reabre el portal cautivo.
@@ -1964,6 +2054,8 @@ void configureWeb() {
   server.on("/connecttest.txt", HTTP_ANY, redirectCaptivePortal);
   server.on("/redirect", HTTP_ANY, redirectCaptivePortal);
   server.on("/fwlink", HTTP_ANY, redirectCaptivePortal);
+  const char* capturedHeaders[] = {"Cookie"};
+  server.collectHeaders(capturedHeaders, 1);
   server.onNotFound(handleDynamicApi);
   server.begin();
 }
@@ -2159,6 +2251,339 @@ void maintainReaderNetwork() {
 
 #endif
 
+struct __attribute__((packed)) LoRaPortalSyncFrame {
+  uint16_t magic;
+  uint8_t version;
+  uint8_t readerNumber;
+  uint32_t key;
+  uint8_t chunkIndex;
+  uint8_t chunkCount;
+  uint8_t payloadLength;
+  char payload[LORA_PORTAL_SYNC_CHUNK_SIZE];
+};
+
+uint32_t portalSyncHash(const String& payload) {
+  uint32_t hash = 2166136261UL;
+  for (size_t index = 0; index < payload.length(); ++index) {
+    hash ^= static_cast<uint8_t>(payload[index]);
+    hash *= 16777619UL;
+  }
+  return hash == 0 ? 1 : hash;
+}
+
+bool enqueuePortalSyncPayload(const String& payload) {
+  if (payload.isEmpty() ||
+      payload.length() > LORA_PORTAL_SYNC_CHUNK_SIZE * LORA_PORTAL_SYNC_MAX_CHUNKS) {
+    Serial.printf("[SYNC] Payload descartado: %u bytes\n",
+                  static_cast<unsigned>(payload.length()));
+    return false;
+  }
+  const uint32_t key = portalSyncHash(payload);
+  for (size_t offset = 0; offset < portalSyncQueueCount; ++offset) {
+    const size_t index = (portalSyncQueueHead + offset) % LORA_PORTAL_SYNC_QUEUE_SIZE;
+    if (portalSyncQueue[index].used && portalSyncQueue[index].key == key &&
+        portalSyncQueue[index].payload == payload) return true;
+  }
+  if (portalSyncQueueCount >= LORA_PORTAL_SYNC_QUEUE_SIZE) {
+    Serial.println("[SYNC] Cola llena; se reintentara en la proxima reconciliacion");
+    return false;
+  }
+  const size_t index = (portalSyncQueueHead + portalSyncQueueCount) %
+                       LORA_PORTAL_SYNC_QUEUE_SIZE;
+  PortalSyncJob& job = portalSyncQueue[index];
+  job.used = true;
+  job.key = key;
+  job.payload = payload;
+  job.chunkIndex = 0;
+  job.repetitionsRemaining = LORA_PORTAL_SYNC_REPEATS;
+  ++portalSyncQueueCount;
+  return true;
+}
+
+void queueSupervisorMessageSync(const SupervisorMessage& message) {
+  JsonDocument document;
+  document["k"] = "s";
+  document["o"] = "u";
+  document["i"] = message.id;
+  document["d"] = message.target;
+  document["l"] = message.level;
+  document["t"] = message.title;
+  document["b"] = message.body;
+  document["a"] = message.author;
+  document["ts"] = message.timestamp;
+  document["x"] = message.active;
+  document["cb"] = message.confirmedBy;
+  document["ct"] = message.confirmedAt;
+  String payload;
+  serializeJson(document, payload);
+  enqueuePortalSyncPayload(payload);
+}
+
+void queueSupervisorDeleteSync(const String& id) {
+  JsonDocument document;
+  document["k"] = "s";
+  document["o"] = "d";
+  document["i"] = id;
+  String payload;
+  serializeJson(document, payload);
+  enqueuePortalSyncPayload(payload);
+}
+
+void queueSupervisorClearSync() {
+  enqueuePortalSyncPayload("{\"k\":\"s\",\"o\":\"c\"}");
+}
+
+void queueMeshMessageSync(const MeshMessage& message) {
+  JsonDocument document;
+  document["k"] = "m";
+  document["o"] = "u";
+  document["i"] = message.id;
+  document["d"] = message.direction;
+  document["b"] = message.body;
+  document["a"] = message.author;
+  document["s"] = message.status;
+  document["ts"] = message.timestamp;
+  document["ut"] = message.updatedAt;
+  document["p"] = message.packetId;
+  document["r"] = message.rssi;
+  document["n"] = message.snr;
+  String payload;
+  serializeJson(document, payload);
+  enqueuePortalSyncPayload(payload);
+}
+
+void queueMeshClearSync() {
+  enqueuePortalSyncPayload("{\"k\":\"m\",\"o\":\"c\"}");
+}
+
+void queueGpsPointSync(const GpsPoint& point) {
+  JsonDocument document;
+  document["k"] = "g";
+  document["la"] = serialized(String(point.latitude, 7));
+  document["lo"] = serialized(String(point.longitude, 7));
+  document["al"] = serialized(String(point.altitude, 1));
+  document["ts"] = point.timestamp;
+  document["ba"] = point.batteryLevel;
+  document["vo"] = serialized(String(point.voltage, 2));
+  document["pr"] = point.precisionBits;
+  document["so"] = point.source;
+  String payload;
+  serializeJson(document, payload);
+  enqueuePortalSyncPayload(payload);
+}
+
+void queueGatewayPresenceSync() {
+  JsonDocument document;
+  document["k"] = "w";
+  document["a"] = true;
+  // El pulso cambia en cada envio para que la deduplicacion de fragmentos no
+  // confunda un heartbeat nuevo con la segunda copia del anterior.
+  document["q"] = millis();
+  String payload;
+  serializeJson(document, payload);
+  enqueuePortalSyncPayload(payload);
+}
+
+void clearPortalSyncAssembly(PortalSyncAssembly& assembly) {
+  assembly.key = 0;
+  assembly.chunkCount = 0;
+  assembly.receivedMask = 0;
+  assembly.startedAt = 0;
+  for (String& chunk : assembly.chunks) chunk = "";
+}
+
+int meshStatusRank(const String& status) {
+  if (status == "confirmado") return 5;
+  if (status == "transmitido") return 4;
+  if (status == "transmitiendo") return 3;
+  if (status == "error") return 2;
+  if (status == "en_cola") return 1;
+  return 0;
+}
+
+void applySupervisorSync(JsonDocument& document) {
+  const String operation = document["o"] | "";
+  const String id = document["i"] | "";
+  if (operation == "c") {
+    messageCount = 0;
+    saveMessages();
+    Serial.println("[SYNC] Historial operacional limpiado por el otro portal");
+    return;
+  }
+  const int existingIndex = findMessage(id);
+  if (operation == "d") {
+    if (existingIndex < 0) return;
+    for (size_t index = static_cast<size_t>(existingIndex);
+         index + 1 < messageCount; ++index) messages[index] = messages[index + 1];
+    if (messageCount > 0) --messageCount;
+    saveMessages();
+    return;
+  }
+  if (operation != "u" || id.isEmpty()) return;
+
+  SupervisorMessage incoming;
+  incoming.used = true;
+  incoming.id = id;
+  incoming.target = document["d"] | "todos";
+  incoming.level = document["l"] | "informacion";
+  incoming.title = document["t"] | "";
+  incoming.body = document["b"] | "";
+  incoming.author = document["a"] | "";
+  incoming.timestamp = document["ts"] | 0ULL;
+  incoming.active = document["x"] | true;
+  incoming.confirmedBy = document["cb"] | "";
+  incoming.confirmedAt = document["ct"] | 0ULL;
+
+  if (existingIndex >= 0) {
+    SupervisorMessage& existing = messages[existingIndex];
+    if (existing.confirmedAt > incoming.confirmedAt) return;
+    existing = incoming;
+  } else {
+    if (messageCount == MAX_MESSAGES) {
+      for (size_t index = MAX_MESSAGES - 1; index > 0; --index) {
+        messages[index] = messages[index - 1];
+      }
+    } else {
+      for (size_t index = messageCount; index > 0; --index) {
+        messages[index] = messages[index - 1];
+      }
+      ++messageCount;
+    }
+    messages[0] = incoming;
+  }
+  saveMessages();
+  Serial.printf("[SYNC] Mensaje operacional %s actualizado\n", id.c_str());
+}
+
+void applyMeshSync(JsonDocument& document) {
+  const String operation = document["o"] | "";
+  if (operation == "c") {
+    size_t retained = 0;
+    for (size_t index = 0; index < meshMessageCount; ++index) {
+      const MeshMessage& message = meshMessages[index];
+      const bool pending = message.used && message.direction == "saliente" &&
+          (message.status == "en_cola" || message.status == "error" ||
+           message.status == "transmitiendo");
+      if (pending) meshMessages[retained++] = message;
+    }
+    for (size_t index = retained; index < meshMessageCount; ++index) {
+      meshMessages[index] = MeshMessage{};
+    }
+    meshMessageCount = retained;
+    saveMeshMessages();
+    return;
+  }
+  if (operation != "u") return;
+  const String id = document["i"] | "";
+  if (id.isEmpty()) return;
+
+  MeshMessage incoming;
+  incoming.used = true;
+  incoming.id = id;
+  incoming.direction = document["d"] | "entrante";
+  incoming.body = document["b"] | "";
+  incoming.author = document["a"] | "";
+  incoming.status = document["s"] | "recibido";
+  incoming.timestamp = document["ts"] | 0ULL;
+  incoming.updatedAt = document["ut"] | 0ULL;
+  incoming.packetId = document["p"] | 0U;
+  incoming.rssi = document["r"] | 0;
+  incoming.snr = document["n"] | 0.0F;
+
+  const int existingIndex = findMeshMessage(id);
+  if (existingIndex >= 0) {
+    MeshMessage& existing = meshMessages[existingIndex];
+    if (existing.updatedAt > incoming.updatedAt &&
+        meshStatusRank(existing.status) >= meshStatusRank(incoming.status)) return;
+    existing = incoming;
+  } else {
+    prependMeshMessage() = incoming;
+  }
+  saveMeshMessages();
+  Serial.printf("[SYNC] Chat Meshtastic %s actualizado\n", id.c_str());
+}
+
+void applyGpsSync(JsonDocument& document) {
+  GpsPoint point;
+  point.latitude = document["la"] | 0.0;
+  point.longitude = document["lo"] | 0.0;
+  point.altitude = document["al"] | 0.0F;
+  point.timestamp = document["ts"] | 0ULL;
+  point.batteryLevel = document["ba"] | -1;
+  point.voltage = document["vo"] | 0.0F;
+  point.precisionBits = document["pr"] | 0;
+  point.source = document["so"] | "meshtastic_gnss";
+  if (!std::isfinite(point.latitude) || !std::isfinite(point.longitude) ||
+      point.timestamp == 0) return;
+  for (size_t index = 0; index < gpsTracker.pointCount; ++index) {
+    if (gpsTracker.points[index].timestamp == point.timestamp) return;
+  }
+  if (gpsTracker.pointCount > 0 && gpsTracker.points[0].timestamp > point.timestamp) return;
+  prependGpsPoint(point);
+  saveGpsTracker();
+  Serial.println("[SYNC] Posicion GNSS replicada entre portales");
+}
+
+void applyPortalSyncPayload(const String& payload) {
+  JsonDocument document;
+  if (deserializeJson(document, payload)) return;
+  const String kind = document["k"] | "";
+  if (kind == "s") applySupervisorSync(document);
+  else if (kind == "m") applyMeshSync(document);
+  else if (kind == "g") applyGpsSync(document);
+  else if (kind == "w" && document["a"].as<bool>()) meshGatewayLastSeen = millis();
+}
+
+void queueCurrentPortalState() {
+  for (size_t index = 0; index < messageCount; ++index) {
+    if (messages[index].used) queueSupervisorMessageSync(messages[index]);
+  }
+  // Al reencontrar otro portal basta reconciliar las conversaciones recientes.
+  // Esto evita ocupar el enlace LoRa durante minutos con un historial antiguo.
+  const size_t recentMeshCount = min(meshMessageCount, static_cast<size_t>(6));
+  for (size_t index = 0; index < recentMeshCount; ++index) {
+    if (meshMessages[index].used) queueMeshMessageSync(meshMessages[index]);
+  }
+  if (gpsTracker.pointCount > 0) queueGpsPointSync(gpsTracker.points[0]);
+  if (meshGatewayDirectLastSeen != 0 &&
+      millis() - meshGatewayDirectLastSeen <= 12000) queueGatewayPresenceSync();
+}
+
+void acceptPortalSyncFrame(const LoRaPortalSyncFrame& frame) {
+  if (frame.readerNumber < 1 || frame.readerNumber > READER_COUNT ||
+      frame.readerNumber == MINA_READER_NUMBER || frame.chunkCount == 0 ||
+      frame.chunkCount > LORA_PORTAL_SYNC_MAX_CHUNKS ||
+      frame.chunkIndex >= frame.chunkCount ||
+      frame.payloadLength > LORA_PORTAL_SYNC_CHUNK_SIZE) return;
+  const size_t remoteIndex = frame.readerNumber - 1;
+  if (completedPortalSyncKey[remoteIndex] == frame.key) return;
+  PortalSyncAssembly& assembly = portalSyncAssemblies[remoteIndex];
+  if (assembly.key != frame.key || assembly.chunkCount != frame.chunkCount ||
+      (assembly.startedAt != 0 &&
+       millis() - assembly.startedAt > LORA_PORTAL_SYNC_ASSEMBLY_TIMEOUT_MS)) {
+    clearPortalSyncAssembly(assembly);
+    assembly.key = frame.key;
+    assembly.chunkCount = frame.chunkCount;
+    assembly.startedAt = millis();
+  }
+  String& chunk = assembly.chunks[frame.chunkIndex];
+  chunk = "";
+  chunk.reserve(frame.payloadLength);
+  for (uint8_t index = 0; index < frame.payloadLength; ++index) {
+    chunk += frame.payload[index];
+  }
+  assembly.receivedMask |= static_cast<uint8_t>(1U << frame.chunkIndex);
+  const uint8_t expectedMask = static_cast<uint8_t>((1U << frame.chunkCount) - 1U);
+  if (assembly.receivedMask != expectedMask) return;
+  String payload;
+  for (uint8_t index = 0; index < frame.chunkCount; ++index) {
+    payload += assembly.chunks[index];
+  }
+  applyPortalSyncPayload(payload);
+  completedPortalSyncKey[remoteIndex] = frame.key;
+  clearPortalSyncAssembly(assembly);
+}
+
 struct __attribute__((packed)) LoRaReading {
   uint16_t major;
   uint16_t minor;
@@ -2203,6 +2628,8 @@ void startNetwork() {
   readerPortalActive[LOCAL_READER_INDEX] = true;
   Serial.printf("[RED] %s distribuido disponible desde %s en http://%s (canal %u)\n",
                 AP_SSID, READER_ID, localIp.toString().c_str(), AP_CHANNEL);
+  Serial.printf("[RED] BSSID %s: %s\n", READER_ID,
+                WiFi.softAPmacAddress().c_str());
 }
 
 void startPortalAccessPoint() {
@@ -2355,26 +2782,90 @@ void transmitLocalObservations() {
   if (state != RADIOLIB_ERR_NONE) Serial.printf("[LORA] Error TX: %d\n", state);
 }
 
-void receiveLoRaObservations() {
-  if (!loRaReady || !loRaPacketReady) return;
-  loRaPacketReady = false;
-  LoRaObservationFrame frame{};
-  const size_t length = radio.getPacketLength();
-  int16_t state = RADIOLIB_ERR_PACKET_TOO_LONG;
-  if (length >= offsetof(LoRaObservationFrame, readings) && length <= sizeof(frame)) {
-    state = radio.readData(reinterpret_cast<uint8_t*>(&frame), length);
+bool transmitPendingPortalSync() {
+  if (!loRaReady || portalSyncQueueCount == 0) return false;
+  const uint32_t interval = LORA_PORTAL_SYNC_TX_MS + LOCAL_READER_INDEX * 70;
+  if (millis() - lastPortalSyncTx < interval) return false;
+
+  PortalSyncJob& job = portalSyncQueue[portalSyncQueueHead];
+  if (!job.used || job.payload.isEmpty()) {
+    job = PortalSyncJob{};
+    portalSyncQueueHead = (portalSyncQueueHead + 1) % LORA_PORTAL_SYNC_QUEUE_SIZE;
+    --portalSyncQueueCount;
+    return false;
   }
+
+  const uint8_t chunkCount = static_cast<uint8_t>(
+      (job.payload.length() + LORA_PORTAL_SYNC_CHUNK_SIZE - 1) /
+      LORA_PORTAL_SYNC_CHUNK_SIZE);
+  if (job.chunkIndex >= chunkCount) job.chunkIndex = 0;
+  const size_t offset = static_cast<size_t>(job.chunkIndex) *
+                        LORA_PORTAL_SYNC_CHUNK_SIZE;
+  const size_t remaining = job.payload.length() - offset;
+  const uint8_t payloadLength = static_cast<uint8_t>(
+      min(remaining, LORA_PORTAL_SYNC_CHUNK_SIZE));
+
+  LoRaPortalSyncFrame frame{};
+  frame.magic = LORA_PORTAL_SYNC_MAGIC;
+  frame.version = LORA_PORTAL_SYNC_VERSION;
+  frame.readerNumber = MINA_READER_NUMBER;
+  frame.key = job.key;
+  frame.chunkIndex = job.chunkIndex;
+  frame.chunkCount = chunkCount;
+  frame.payloadLength = payloadLength;
+  memcpy(frame.payload, job.payload.c_str() + offset, payloadLength);
+
+  const size_t length = offsetof(LoRaPortalSyncFrame, payload) + payloadLength;
+  radio.clearPacketReceivedAction();
+  const int16_t state = radio.transmit(reinterpret_cast<uint8_t*>(&frame), length);
+  radio.setPacketReceivedAction(onLoRaPacket);
   radio.startReceive();
+  lastPortalSyncTx = millis();
+  if (state != RADIOLIB_ERR_NONE) {
+    Serial.printf("[SYNC] Error TX: %d\n", state);
+    return true;
+  }
+
+  ++job.chunkIndex;
+  if (job.chunkIndex >= chunkCount) {
+    job.chunkIndex = 0;
+    if (job.repetitionsRemaining > 1) {
+      --job.repetitionsRemaining;
+    } else {
+      job = PortalSyncJob{};
+      portalSyncQueueHead = (portalSyncQueueHead + 1) % LORA_PORTAL_SYNC_QUEUE_SIZE;
+      --portalSyncQueueCount;
+    }
+  }
+  return true;
+}
+
+void markRemoteReaderSeen(size_t remoteIndex) {
+  const uint32_t now = millis();
+  const bool wasOnline = readerOnline(remoteIndex, now);
+  readerLastSeen[remoteIndex] = now;
+  if (!wasOnline) {
+    Serial.printf("[SYNC] %s disponible; reconciliando portales\n",
+                  READERS[remoteIndex].id);
+    queueCurrentPortalState();
+  }
+}
+
+void acceptObservationPacket(const uint8_t* packet, size_t length) {
+  if (length < offsetof(LoRaObservationFrame, readings) ||
+      length > sizeof(LoRaObservationFrame)) return;
+  LoRaObservationFrame frame{};
+  memcpy(&frame, packet, length);
   const uint8_t readingCount = frame.count & LORA_READING_COUNT_MASK;
   const size_t expectedLength = offsetof(LoRaObservationFrame, readings) +
                                 readingCount * sizeof(LoRaReading);
-  if (state != RADIOLIB_ERR_NONE || frame.magic != 0x4D49 || frame.version != 1 ||
+  if (frame.magic != 0x4D49 || frame.version != 1 ||
       frame.readerNumber < 1 || frame.readerNumber > READER_COUNT ||
       frame.readerNumber == MINA_READER_NUMBER || readingCount > TAG_COUNT ||
       length != expectedLength) return;
 
   const size_t remoteIndex = frame.readerNumber - 1;
-  readerLastSeen[remoteIndex] = millis();
+  markRemoteReaderSeen(remoteIndex);
   const bool remotePortalActive = (frame.count & LORA_PORTAL_ACTIVE_FLAG) != 0;
   if (readerPortalActive[remoteIndex] != remotePortalActive) {
     readerPortalActive[remoteIndex] = remotePortalActive;
@@ -2393,10 +2884,53 @@ void receiveLoRaObservations() {
   }
 }
 
+void acceptPortalSyncPacket(const uint8_t* packet, size_t length) {
+  if (length < offsetof(LoRaPortalSyncFrame, payload) ||
+      length > sizeof(LoRaPortalSyncFrame)) return;
+  LoRaPortalSyncFrame frame{};
+  memcpy(&frame, packet, length);
+  const size_t expectedLength = offsetof(LoRaPortalSyncFrame, payload) +
+                                frame.payloadLength;
+  if (frame.magic != LORA_PORTAL_SYNC_MAGIC ||
+      frame.version != LORA_PORTAL_SYNC_VERSION ||
+      frame.readerNumber < 1 || frame.readerNumber > READER_COUNT ||
+      frame.readerNumber == MINA_READER_NUMBER ||
+      frame.payloadLength > LORA_PORTAL_SYNC_CHUNK_SIZE ||
+      length != expectedLength) return;
+  markRemoteReaderSeen(frame.readerNumber - 1);
+  acceptPortalSyncFrame(frame);
+}
+
+void receiveLoRaPackets() {
+  if (!loRaReady || !loRaPacketReady) return;
+  loRaPacketReady = false;
+  const size_t length = radio.getPacketLength();
+  uint8_t packet[256] = {0};
+  int16_t state = RADIOLIB_ERR_PACKET_TOO_LONG;
+  if (length >= sizeof(uint16_t) && length <= sizeof(packet))
+    state = radio.readData(packet, length);
+  radio.startReceive();
+  if (state != RADIOLIB_ERR_NONE) return;
+  uint16_t magic = 0;
+  memcpy(&magic, packet, sizeof(magic));
+  if (magic == 0x4D49) acceptObservationPacket(packet, length);
+  else if (magic == LORA_PORTAL_SYNC_MAGIC) acceptPortalSyncPacket(packet, length);
+}
+
 void maintainReaderNetwork() {
-  receiveLoRaObservations();
+  receiveLoRaPackets();
   maintainPortalElection();
-  transmitLocalObservations();
+  const uint32_t now = millis();
+  if (meshGatewayDirectLastSeen != 0 &&
+      now - meshGatewayDirectLastSeen <= 12000 &&
+      now - lastGatewayPresenceSync >= LORA_GATEWAY_PRESENCE_SYNC_MS) {
+    lastGatewayPresenceSync = now;
+    queueGatewayPresenceSync();
+  }
+  const uint32_t observationInterval =
+      LORA_TX_INTERVAL_MS + LOCAL_READER_INDEX * 170;
+  if (now - lastLoRaTx >= observationInterval) transmitLocalObservations();
+  else transmitPendingPortalSync();
 }
 
 void startBluetooth() {
@@ -2412,6 +2946,42 @@ void startBluetooth() {
   scanner->setInterval(160);
   scanner->setWindow(120);
   scanner->start(0, false, true);
+}
+
+void printBackupFileToSerial(const char* path) {
+  Serial.printf("[BACKUP-BEGIN]%s\n", path);
+  File file = LittleFS.open(path, "r");
+  if (file) {
+    uint8_t buffer[192];
+    while (file.available()) {
+      const size_t count = file.read(buffer, sizeof(buffer));
+      Serial.write(buffer, count);
+    }
+    file.close();
+  } else {
+    Serial.print("{}");
+  }
+  Serial.printf("\n[BACKUP-END]%s\n", path);
+}
+
+void serviceSerialMaintenance() {
+  static String command;
+  while (Serial.available()) {
+    const char incoming = static_cast<char>(Serial.read());
+    if (incoming == '\r' || incoming == '\n') {
+      command.trim();
+      if (command == "BACKUP_JSON") {
+        printBackupFileToSerial("/mensajes.json");
+        printBackupFileToSerial("/mensajes_mesh.json");
+        printBackupFileToSerial("/historial.json");
+        printBackupFileToSerial("/gps_tracker.json");
+        Serial.println("[BACKUP-COMPLETE]");
+      }
+      command = "";
+    } else if (command.length() < 32) {
+      command += incoming;
+    }
+  }
 }
 
 }  // namespace
@@ -2451,6 +3021,7 @@ void setup() {
 }
 
 void loop() {
+  serviceSerialMaintenance();
 #if 0
 #if MINA_READER_NUMBER == 2
   dnsServer.processNextRequest();

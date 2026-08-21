@@ -85,11 +85,11 @@ $("meshMessageForm").addEventListener("submit", async event => {
 });
 
 $("meshClearHistory").addEventListener("click", async () => {
-  const accepted = window.confirm(
-    "¿Limpiar el historial visible de esta página?\n\n" +
-    "Los mensajes ya recibidos por el T1000-E no se borrarán. " +
-    "Los envíos todavía pendientes se conservarán."
-  );
+  const accepted = await window.requestMinaConfirmation({
+    title: "¿Limpiar la conversación de la página?",
+    message: "Los mensajes recibidos por el T1000-E no se borrarán y los envíos pendientes se conservarán.",
+    confirmText: "Sí, limpiar conversación"
+  });
   if (!accepted) return;
 
   const button = $("meshClearHistory");

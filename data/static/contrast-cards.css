@@ -1443,6 +1443,46 @@ button:not(.pin-toggle):not(.refresh-button):not(.dialog-head > button) {
   }
 }
 
+/* Confirmacion destructiva propia del portal: funciona tambien en la ventana
+   cautiva de iOS, donde los dialogos nativos pueden quedar bloqueados. */
+.action-confirm-backdrop { z-index: 1200 !important; padding: 18px !important; }
+.action-confirm-dialog {
+  width: min(480px, 100%) !important;
+  padding: 24px !important;
+  display: grid !important;
+  grid-template-columns: 48px 1fr !important;
+  gap: 14px !important;
+  border-top-color: #c54236 !important;
+}
+.action-confirm-icon {
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #fff0ee;
+  color: #ae352c;
+  font-size: 1.45rem;
+  font-weight: 900;
+  box-shadow: inset 0 0 0 2px #dba9a4;
+}
+.action-confirm-dialog h2 { margin: 5px 0 8px; font-size: 1.25rem; }
+.action-confirm-dialog p { margin: 0; color: #59635e; line-height: 1.45; }
+.action-confirm-actions {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1.35fr;
+  gap: 10px;
+  margin-top: 8px;
+}
+.action-confirm-actions button { min-height: 48px; border-radius: 10px; font-weight: 850; }
+.action-confirm-actions .button-danger { border: 1px solid #b73a30; background: #b73a30; color: #fff; }
+@media (max-width: 460px) {
+  .action-confirm-dialog { grid-template-columns: 40px 1fr !important; padding: 20px !important; }
+  .action-confirm-icon { width: 40px; height: 40px; }
+  .action-confirm-actions { grid-template-columns: 1fr; }
+}
+
 /* Actualizar comparte la fila y las dimensiones de los controles de zoom. */
 .map-toolbar > #refresh.refresh-map,
 .map-toolbar > #refresh.refresh-map:hover,
@@ -1461,6 +1501,31 @@ button:not(.pin-toggle):not(.refresh-button):not(.dialog-head > button) {
   transition: transform .25s ease;
 }
 .map-toolbar > #refresh:hover .refresh-icon { transform: rotate(28deg); }
+.map-toolbar > #refresh .refresh-progress {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 31px;
+  height: 31px;
+}
+.map-toolbar > #refresh .refresh-progress i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: mina-refresh-dot .9s ease-in-out infinite;
+}
+.map-toolbar > #refresh .refresh-progress i:nth-child(2) { animation-delay: .14s; }
+.map-toolbar > #refresh .refresh-progress i:nth-child(3) { animation-delay: .28s; }
+.map-toolbar > #refresh.is-refreshing .refresh-icon { display: none; }
+.map-toolbar > #refresh.is-refreshing .refresh-progress { display: inline-flex; }
+.map-toolbar > #refresh.is-refreshing,
+.map-toolbar > #refresh:disabled { cursor: wait; filter: saturate(.88); opacity: 1; }
+@keyframes mina-refresh-dot {
+  0%, 60%, 100% { transform: translateY(0); opacity: .42; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
 
 /* Plano operacional del estacionamiento. */
 .dxf-download {

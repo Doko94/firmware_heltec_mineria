@@ -14,8 +14,8 @@
   <link rel="stylesheet" href="/static/gps.css?v=20260814-05" media="print" onload="this.media='all'">
   <link rel="stylesheet" href="/static/supervisor-fix.css?v=20260814-04" media="print" onload="this.media='all'">
   <link rel="stylesheet" href="/static/groundhog-theme.css?v=20260814-04" media="print" onload="this.media='all'">
-  <link rel="stylesheet" href="/static/contrast-cards.css?v=20260814-05" media="print" onload="this.media='all'">
-  <link rel="stylesheet" href="/static/subterranean-map.css?v=20260814-07" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="/static/contrast-cards.css?v=20260820-02" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="/static/subterranean-map.css?v=20260820-02" media="print" onload="this.media='all'">
 </head>
 <body>
   <header class="topbar">
@@ -110,6 +110,16 @@
         <button type="button" data-mine-level="N3">Nivel 3 <small>−650 m</small></button>
         <span id="mineLevelHint">Selecciona un nivel para localizar RX y TAG por zona; acerca el mapa para revelar sus identificadores.</span>
       </div>
+      <form id="beaconSearchForm" class="beacon-search" role="search">
+        <label for="beaconSearchInput"><span>LOCALIZAR PERSONAL</span><strong>Buscar beacon o trabajador</strong></label>
+        <div class="beacon-search-controls">
+          <input id="beaconSearchInput" list="beaconSearchOptions" type="search" maxlength="60" autocomplete="off" autocapitalize="characters" placeholder="Ej.: TAG-001 o Trabajador 01" aria-describedby="beaconSearchStatus">
+          <datalist id="beaconSearchOptions"></datalist>
+          <button id="beaconSearchSubmit" type="submit">Localizar</button>
+          <button id="beaconSearchClear" class="beacon-search-clear" type="button" hidden>Limpiar</button>
+        </div>
+        <output id="beaconSearchStatus" for="beaconSearchInput" aria-live="polite">Busca por código TAG o por nombre para centrarlo en su nivel.</output>
+      </form>
       <div class="mine-area-selector">
         <label for="mineAreaSelect"><span>ZOOM POR ZONA</span><strong>Ir a un área específica</strong></label>
         <select id="mineAreaSelect" aria-describedby="mineAreaHint" disabled>
@@ -122,7 +132,7 @@
         <button id="resetView" class="button-map" type="button">Centrar</button>
         <button id="mapRotateLeft" class="button-map zoom-only rotate-map" type="button" aria-label="Girar mapa a la izquierda" title="Girar a la izquierda"><svg class="zoom-icon" viewBox="0 0 32 32" aria-hidden="true"><path d="M8.5 10.5H3V5"></path><path d="M3.8 10A12 12 0 1 1 3.5 22"></path></svg><span class="visually-hidden">Girar a la izquierda</span></button>
         <button id="mapRotateRight" class="button-map zoom-only rotate-map" type="button" aria-label="Girar mapa a la derecha" title="Girar a la derecha"><svg class="zoom-icon" viewBox="0 0 32 32" aria-hidden="true"><path d="M23.5 10.5H29V5"></path><path d="M28.2 10A12 12 0 1 0 28.5 22"></path></svg><span class="visually-hidden">Girar a la derecha</span></button>
-        <button id="refresh" class="button-map zoom-only refresh-map" type="button" aria-label="Actualizar estados" title="Actualizar estados"><svg class="refresh-icon" viewBox="0 0 32 32" aria-hidden="true"><path d="M25.3 10.3A11 11 0 0 0 6 9.1"></path><path d="M6.2 4.7 6 9.4l4.7.1"></path><path d="M6.7 21.7A11 11 0 0 0 26 22.9"></path><path d="m25.8 27.3.2-4.7-4.7-.1"></path></svg><span class="visually-hidden">Actualizar estados</span></button>
+        <button id="refresh" class="button-map zoom-only refresh-map" type="button" aria-label="Actualizar estados" title="Actualizar estados"><svg class="refresh-icon" viewBox="0 0 32 32" aria-hidden="true"><path d="M25.3 10.3A11 11 0 0 0 6 9.1"></path><path d="M6.2 4.7 6 9.4l4.7.1"></path><path d="M6.7 21.7A11 11 0 0 0 26 22.9"></path><path d="m25.8 27.3.2-4.7-4.7-.1"></path></svg><span class="refresh-progress" aria-hidden="true"><i></i><i></i><i></i></span><span class="visually-hidden refresh-accessible-label">Actualizar estados</span></button>
         <button id="mapZoomIn" class="button-map zoom-only" type="button" aria-label="Acercar mapa" title="Acercar mapa"><svg class="zoom-icon" viewBox="0 0 32 32" aria-hidden="true"><circle cx="13.5" cy="13.5" r="8.5"></circle><path d="m20 20 7 7M9.5 13.5h8M13.5 9.5v8"></path></svg></button>
         <button id="mapZoomOut" class="button-map zoom-only" type="button" aria-label="Alejar mapa" title="Alejar mapa"><svg class="zoom-icon" viewBox="0 0 32 32" aria-hidden="true"><circle cx="13.5" cy="13.5" r="8.5"></circle><path d="m20 20 7 7M9.5 13.5h8"></path></svg></button>
       </div>
@@ -251,10 +261,17 @@
       </section>
     </section>
   </div>
-  <script defer src="/static/app.js?v=20260814-05"></script>
-  <script defer src="/static/rtls.js?v=20260814-09"></script>
-  <script defer src="/static/messages.js?v=20260814-05"></script>
-  <script defer src="/static/mesh-messages.js?v=20260814-04"></script>
+  <div class="supervisor-backdrop action-confirm-backdrop" id="actionConfirmModal" hidden>
+    <section class="supervisor-dialog action-confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="actionConfirmTitle" aria-describedby="actionConfirmMessage">
+      <div class="action-confirm-icon" aria-hidden="true">!</div>
+      <div><span class="label">CONFIRMAR ACCIÓN</span><h2 id="actionConfirmTitle">¿Eliminar información?</h2><p id="actionConfirmMessage">Esta acción no se puede deshacer.</p></div>
+      <div class="action-confirm-actions"><button id="actionConfirmCancel" class="button-secondary" type="button">Cancelar</button><button id="actionConfirmAccept" class="button-danger" type="button">Sí, eliminar</button></div>
+    </section>
+  </div>
+  <script defer src="/static/app.js?v=20260820-02"></script>
+  <script defer src="/static/rtls.js?v=20260820-03"></script>
+  <script defer src="/static/messages.js?v=20260820-01"></script>
+  <script defer src="/static/mesh-messages.js?v=20260820-01"></script>
   <script defer src="/static/gps.js?v=20260814-05"></script>
 </body>
 </html>

@@ -126,6 +126,30 @@ def latest_mesh_messages(text: str):
     )[1]
 
 
+def latest_supervisor_messages(text: str):
+    """Recupera la matriz raíz de mensajes operacionales del portal."""
+    candidates = []
+    for offset, value in json_candidates(text, '[{"id":"'):
+        if not isinstance(value, list):
+            continue
+        if value and not all(
+            isinstance(item, dict)
+            and {"id", "destino", "nivel", "titulo", "mensaje", "vigente"}.issubset(item)
+            for item in value
+        ):
+            continue
+        latest = max(
+            [int(item.get("confirmado_fecha") or item.get("fecha") or 0) for item in value]
+            or [0]
+        )
+        candidates.append(((latest, len(value), offset), value))
+    return max(
+        candidates,
+        default=(None, None),
+        key=lambda item: item[0] or (0, 0, 0),
+    )[1]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("image", type=Path)
@@ -134,6 +158,7 @@ def main():
 
     text = args.image.read_bytes().decode("utf-8", errors="ignore")
     recovered = {
+        "mensajes.json": latest_supervisor_messages(text),
         "historial.json": latest_history(text),
         "gps_tracker.json": latest_gps(text),
         "mensajes_mesh.json": latest_mesh_messages(text),
@@ -142,7 +167,13 @@ def main():
         if value is None:
             print(f"{name}: no recuperado")
             continue
-        if name == "historial.json":
+        if name == "mensajes.json":
+            items = value
+            latest = max(
+                [int(item.get("confirmado_fecha") or item.get("fecha") or 0) for item in items]
+                or [0]
+            )
+        elif name == "historial.json":
             items = value.get("eventos", [])
             latest = max((int(item.get("fecha") or 0) for item in items), default=0)
         elif name == "gps_tracker.json":

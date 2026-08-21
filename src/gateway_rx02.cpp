@@ -15,6 +15,9 @@ namespace {
 // y el portal que RX-01 publica dentro de MINA-LOCAL.
 constexpr char WIFI_SSID[] = "MINA-LOCAL";
 constexpr uint8_t WIFI_CHANNEL = 6;
+// BSSID SoftAP confirmado por RX-01. RX02 lo intenta primero y conserva RX03
+// como respaldo real cuando el reader principal no esta disponible.
+constexpr uint8_t RX01_AP_BSSID[6] = {0xF2, 0x9E, 0x9E, 0x76, 0x24, 0x98};
 constexpr char RX01_GPS_ENDPOINT[] = "http://192.168.4.1/api/gps/actualizar";
 constexpr char RX01_QUEUE_ENDPOINT[] = "http://192.168.4.1/api/meshtastic/cola";
 constexpr char RX01_STATUS_ENDPOINT[] = "http://192.168.4.1/api/meshtastic/estado";
@@ -45,6 +48,8 @@ constexpr uint8_t POSITION_APP = 3;
 constexpr uint8_t ROUTING_APP = 5;
 constexpr size_t MESH_HEADER_LENGTH = 16;
 constexpr size_t MESH_MAX_ENCRYPTED_LENGTH = 239;
+constexpr uint8_t PACKET_HOP_LIMIT_MASK = 0x07;
+constexpr uint8_t PACKET_WANT_ACK_MASK = 0x08;
 
 // Clave AES-256 del canal ALERTA. No se imprime ni se expone por la red.
 constexpr uint8_t MESH_CHANNEL_KEY[32] = {
@@ -178,6 +183,8 @@ uint32_t positionCount = 0;
 uint32_t messageRxCount = 0;
 uint32_t messageTxCount = 0;
 uint32_t lastWifiAttempt = 0;
+uint8_t preferredWifiAttempts = 0;
+bool wifiWasConnected = false;
 uint32_t lastPostAttempt = 0;
 uint32_t lastTextPostAttempt = 0;
 uint32_t lastQueuePoll = 0;
@@ -418,19 +425,78 @@ void startWifi() {
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
   WiFi.setAutoReconnect(true);
-  WiFi.begin(WIFI_SSID, nullptr, WIFI_CHANNEL);
+  WiFi.begin(WIFI_SSID, nullptr, WIFI_CHANNEL, RX01_AP_BSSID, true);
+  preferredWifiAttempts = 1;
   lastWifiAttempt = millis();
-  Serial.println("[GATEWAY] Buscando RX-01 en MINA-LOCAL...");
+  Serial.println("[GATEWAY] Buscando BSSID de RX-01 en MINA-LOCAL...");
 }
 
 void maintainWifi() {
-  if (WiFi.status() == WL_CONNECTED) return;
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!wifiWasConnected) {
+      wifiWasConnected = true;
+      Serial.printf("[GATEWAY] WiFi conectado: IP=%s BSSID=%s RSSI=%d dBm\n",
+                    WiFi.localIP().toString().c_str(),
+                    WiFi.BSSIDstr().c_str(), WiFi.RSSI());
+      lastGatewayState = "Enlace WiFi operativo";
+      renderStatus();
+    }
+    return;
+  }
+  if (wifiWasConnected) {
+    wifiWasConnected = false;
+    Serial.println("[GATEWAY] Enlace WiFi perdido; iniciando reconexion");
+    lastGatewayState = "Reconectando WiFi";
+    renderStatus();
+  }
   const uint32_t now = millis();
   if (now - lastWifiAttempt < WIFI_RETRY_MS) return;
   lastWifiAttempt = now;
   WiFi.disconnect(false, false);
-  WiFi.begin(WIFI_SSID, nullptr, WIFI_CHANNEL);
-  Serial.println("[GATEWAY] Reintentando enlace Wi-Fi con RX-01");
+  if (preferredWifiAttempts < 3) {
+    ++preferredWifiAttempts;
+    WiFi.begin(WIFI_SSID, nullptr, WIFI_CHANNEL, RX01_AP_BSSID, true);
+    Serial.println("[GATEWAY] Reintentando enlace Wi-Fi directo con RX-01");
+  } else {
+    // Si RX-01 esta apagado, cualquier otro portal distribuido conserva GPS y
+    // chat mediante la nueva replicacion LoRa entre lectores.
+    WiFi.begin(WIFI_SSID, nullptr, WIFI_CHANNEL);
+    Serial.println("[GATEWAY] RX-01 no visible; buscando portal MINA-LOCAL de respaldo");
+  }
+}
+
+bool relayTrackerBroadcast(uint8_t* packet, size_t packetLength,
+                           const MeshHeader& receivedHeader) {
+  if (receivedHeader.to != MESH_BROADCAST) return false;
+  const uint8_t hopLimit = receivedHeader.flags & PACKET_HOP_LIMIT_MASK;
+  if (hopLimit == 0) return false;
+
+  // Meshtastic confirma implicitamente un mensaje de canal cuando el emisor
+  // escucha a otro nodo repetir el mismo from/id. Conservamos intacto el
+  // payload cifrado y solo actualizamos los campos propios del relay.
+  MeshHeader relayHeader = receivedHeader;
+  relayHeader.flags &= static_cast<uint8_t>(~PACKET_HOP_LIMIT_MASK);
+  relayHeader.flags &= static_cast<uint8_t>(~PACKET_WANT_ACK_MASK);
+  relayHeader.flags |= static_cast<uint8_t>(hopLimit - 1);
+  relayHeader.nextHop = 0;
+  relayHeader.relayNode = static_cast<uint8_t>(GATEWAY_NODE_NUM & 0xFF);
+  memcpy(packet, &relayHeader, sizeof(relayHeader));
+
+  // Una breve espera evita transmitir sobre la cola del paquete que acaba de
+  // llegar y deja al T1000-E listo para escuchar la repeticion/ACK implicito.
+  delay(180 + static_cast<uint32_t>(esp_random() % 160));
+  packetReady = false;
+  radio.clearPacketReceivedAction();
+  radio.standby();
+  const int16_t transmitState = radio.transmit(packet, packetLength);
+  radio.setPacketReceivedAction(onRadioPacket);
+  const int16_t receiveState = radio.startReceive();
+  radioReady = receiveState == RADIOLIB_ERR_NONE;
+  Serial.printf("[MESH] Repeticion %08lX, saltos %u->%u: TX=%d RX=%d\n",
+                static_cast<unsigned long>(receivedHeader.id), hopLimit,
+                static_cast<unsigned>(hopLimit - 1), transmitState,
+                receiveState);
+  return transmitState == RADIOLIB_ERR_NONE && radioReady;
 }
 
 void receiveMeshPacket() {
@@ -470,10 +536,12 @@ void receiveMeshPacket() {
   rememberPacket(header.id);
 
   if (decoded.portNumber == TEXT_MESSAGE_APP) {
+    const bool relayed = relayTrackerBroadcast(packet, packetLength, header);
     if (queueIncomingText(decoded.payload, decoded.payloadLength, header.id,
                           rssi, snr)) {
       ++messageRxCount;
-      lastGatewayState = "Mensaje recibido";
+      lastGatewayState = relayed ? "Mensaje recibido/confirmado"
+                                 : "Mensaje recibido";
       Serial.printf("[CHAT] Trabajador 01: %s (paquete %08lX)\n",
                     pendingTexts[pendingTextItems - 1].text.c_str(),
                     static_cast<unsigned long>(header.id));

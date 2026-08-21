@@ -5,6 +5,36 @@ const labels = { peligro: "Peligro", precaucion: "Precaución", proximo: "Próxi
 const trends = { acercandose: "↓ Acercándose", alejandose: "↑ Alejándose", estable: "— Estable", sin_datos: "Sin tendencia" };
 const shiftLabels = { ingresando: "Registrando ingreso", en_turno: "En turno", saliendo: "Registrando salida", fuera: "Fuera del recinto", ausente: "Pendiente de ingreso", sin_senal: "Sin señal" };
 
+let actionConfirmationResolver = null;
+
+function closeActionConfirmation(accepted) {
+  const modal = $("actionConfirmModal");
+  if (!modal || modal.hidden) return;
+  modal.hidden = true;
+  const resolve = actionConfirmationResolver;
+  actionConfirmationResolver = null;
+  if (resolve) resolve(Boolean(accepted));
+}
+
+window.requestMinaConfirmation = ({ title, message, confirmText = "Sí, eliminar" }) => {
+  if (actionConfirmationResolver) closeActionConfirmation(false);
+  $("actionConfirmTitle").textContent = title || "¿Eliminar información?";
+  $("actionConfirmMessage").textContent = message || "Esta acción no se puede deshacer.";
+  $("actionConfirmAccept").textContent = confirmText;
+  $("actionConfirmModal").hidden = false;
+  window.setTimeout(() => $("actionConfirmAccept").focus(), 0);
+  return new Promise(resolve => { actionConfirmationResolver = resolve; });
+};
+
+$("actionConfirmCancel").addEventListener("click", () => closeActionConfirmation(false));
+$("actionConfirmAccept").addEventListener("click", () => closeActionConfirmation(true));
+$("actionConfirmModal").addEventListener("click", event => {
+  if (event.target === $("actionConfirmModal")) closeActionConfirmation(false);
+});
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && !$("actionConfirmModal").hidden) closeActionConfirmation(false);
+});
+
 function formatTime(value) {
   if (!value) return "Nunca";
   return new Intl.DateTimeFormat("es-CL", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value));
@@ -60,10 +90,19 @@ function renderAssets() {
 }
 
 async function clearAssetHistory(beaconId) {
-  if (!confirm(`¿Limpiar el historial de ${beaconId}? Los otros TAG no serán modificados.`)) return;
-  const response = await fetch(`/api/historial-proximidad/${encodeURIComponent(beaconId)}`, { method: "DELETE" });
-  if (!response.ok) { alert(await response.text()); return; }
-  await fetchState();
+  const accepted = await window.requestMinaConfirmation({
+    title: `¿Limpiar el historial de ${beaconId}?`,
+    message: "Se borrarán sus cambios de proximidad y contadores. Los otros TAG no serán modificados.",
+    confirmText: "Sí, limpiar historial"
+  });
+  if (!accepted) return;
+  try {
+    const response = await fetch(`/api/historial-proximidad/${encodeURIComponent(beaconId)}`, { method: "DELETE" });
+    if (!response.ok) throw new Error(await response.text());
+    await Promise.all([fetchState(), loadReports()]);
+  } catch (error) {
+    alert(error.message || "No fue posible limpiar el historial del TAG.");
+  }
 }
 
 function renderEvents() {
@@ -242,7 +281,27 @@ async function refreshAll() {
   await Promise.all([refreshLocalState(), loadReports()]);
 }
 
-$("refresh").addEventListener("click", refreshAll);
+async function runFriendlyRefresh() {
+  const button = $("refresh");
+  if (button.classList.contains("is-refreshing")) return;
+  const startedAt = performance.now();
+  button.classList.add("is-refreshing");
+  button.disabled = true;
+  button.setAttribute("aria-label", "Actualizando estados");
+  button.querySelector(".refresh-accessible-label").textContent = "Actualizando estados";
+  try {
+    await refreshAll();
+    const remaining = 650 - (performance.now() - startedAt);
+    if (remaining > 0) await new Promise(resolve => window.setTimeout(resolve, remaining));
+  } finally {
+    button.classList.remove("is-refreshing");
+    button.disabled = false;
+    button.setAttribute("aria-label", "Actualizar estados");
+    button.querySelector(".refresh-accessible-label").textContent = "Actualizar estados";
+  }
+}
+
+$("refresh").addEventListener("click", runFriendlyRefresh);
 $("refreshReports").addEventListener("click", loadReports);
 $("exportReport").addEventListener("click", exportReportCsv);
 [$("reportTagFilter"), $("reportReaderFilter"), $("reportTypeFilter"), $("reportPeriodFilter")]
